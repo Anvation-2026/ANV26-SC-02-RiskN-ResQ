@@ -1,28 +1,49 @@
 /**
  * Production API service layer for RiskNResQ.
- * Communicates directly with the FastAPI real-data backend.
- * Zero hardcoded synthetic demo data or fake coordinates.
+ * Communicates directly with the FastAPI real-data backend with bearer token session support.
+ * Zero hardcoded synthetic demo data or fake coordinates in live operations.
  */
 import { API_BASE_URL, REQUEST_TIMEOUT_MS, FORCE_MOCK } from '../config/api';
+import { getToken, notifyUnauthorized } from './session';
 
 let source = 'live';
 export const getSource = () => source;
 
-async function http(path, options = {}) {
+export async function http(path, options = {}) {
   if (FORCE_MOCK) throw new Error('MOCK_MODE_ACTIVE');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const token = getToken();
+
   try {
     const res = await fetch(API_BASE_URL + path, {
-      headers: { 'Content-Type': 'application/json' },
       ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...options.headers,
+      },
       body: options.body ? JSON.stringify(options.body) : undefined,
       signal: controller.signal,
     });
+
     if (!res.ok) {
-      const errorText = await res.text().catch(() => '');
-      throw new Error(`API ${res.status}: ${errorText || res.statusText}`);
+      let detail = null;
+      try {
+        const b = await res.json();
+        detail = typeof b.detail === 'string' ? b.detail : null;
+      } catch (e) {
+        /* not JSON */
+      }
+      const err = new Error(detail || `API ${res.status}: ${res.statusText}`);
+      err.status = res.status;
+      err.detail = detail;
+      if (res.status === 401 && token && !path.startsWith('/auth/login')) {
+        notifyUnauthorized();
+      }
+      throw err;
     }
+
     source = 'live';
     return await res.json();
   } catch (err) {
@@ -43,22 +64,40 @@ export async function syncTelemetry(latitude, longitude) {
 
 // ── 2. REAL FLOOD RISK EVALUATION ───────────────────────────────────────
 export async function getRisk(latitude, longitude) {
-  if (typeof latitude !== 'number' || typeof longitude !== 'number') {
-    throw new Error('Valid GPS coordinates are required for risk calculation.');
+  let url = '/risk';
+  if (typeof latitude === 'number' && typeof longitude === 'number') {
+    url += `?latitude=${latitude}&longitude=${longitude}`;
   }
-  const raw = await http(`/risk?latitude=${latitude}&longitude=${longitude}`);
+  const raw = await http(url);
+  const o = raw.overall || raw;
   return {
-    score: raw.risk_score,
-    level: raw.risk_level,
-    zone: raw.location || `${raw.latitude.toFixed(4)}, ${raw.longitude.toFixed(4)}`,
-    reason: raw.reason,
-    rainfall: raw.rainfall_24h_mm,
-    intensity: raw.rainfall_intensity_mm_per_hour,
-    warning: raw.warning_level,
-    weatherSource: raw.weather_source,
-    factors: raw.factors,
-    observedAt: raw.observed_at,
+    score: o.risk_score,
+    level: o.risk_level,
+    zone: o.location || (typeof o.latitude === 'number' ? `${o.latitude.toFixed(4)}, ${o.longitude.toFixed(4)}` : 'Current Zone'),
+    reason: o.reason,
+    rainfall: o.rainfall_24h_mm ?? o.rainfall ?? 0,
+    intensity: o.rainfall_intensity_mm_per_hour,
+    warning: o.warning_level,
+    weatherSource: o.weather_source,
+    factors: o.factors,
+    observedAt: o.observed_at,
+    zones: raw.zones || [o],
   };
+}
+
+export async function getAlerts() {
+  try {
+    const raw = await http('/alerts?active_only=true');
+    return raw.filter((a) => a.active !== false).map((a) => ({
+      id: a.id,
+      severity: a.severity,
+      message: a.message,
+      zone: a.affected_zone,
+      createdAt: a.created_at,
+    }));
+  } catch (e) {
+    return [];
+  }
 }
 
 // ── 3. INCIDENTS & HAZARDS ──────────────────────────────────────────────
@@ -162,4 +201,34 @@ export async function requestHelp({ type, priority = 'HIGH', latitude, longitude
   const response = await http('/help-requests', { method: 'POST', body });
   lastMatch = response;
   return response;
+}
+
+// ── 7. DEMO / DEVELOPMENT CONTROLS ──────────────────────────────────────
+export async function setDemoScenario(scenario) {
+  const flood = scenario === 'flood';
+  const rainfall = flood ? 85 : 5;
+  try {
+    if (!flood) await http('/reset', { method: 'POST' });
+    await http('/simulate-hazard', { method: 'POST', body: { hazard: 'FLOOD', rainfall } });
+    const roads = await http('/roads');
+    for (const r of roads) {
+      const shouldBlock = flood && r.id === roads[0].id;
+      if (shouldBlock && r.status !== 'BLOCKED') await http(`/roads/${r.id}/block`, { method: 'POST' });
+      if (!shouldBlock && r.status === 'BLOCKED') await http(`/roads/${r.id}/unblock`, { method: 'POST' });
+    }
+    source = 'live';
+  } catch (e) {
+    source = 'offline';
+  }
+}
+
+export async function syncRoadA(blocked) {
+  try {
+    const roads = await http('/roads');
+    if (roads && roads.length) {
+      await http(`/roads/${roads[0].id}/${blocked ? 'block' : 'unblock'}`, { method: 'POST' });
+    }
+  } catch (e) {
+    /* best effort */
+  }
 }

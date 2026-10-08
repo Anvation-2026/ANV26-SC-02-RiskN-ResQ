@@ -3,13 +3,24 @@ from fastapi.testclient import TestClient
 import db
 from main import app
 
+import auth
+
+ADMIN = {"email": "admin@test.local", "password": "Adm1n-test-pass"}
 client = TestClient(app)
 
 
 @pytest.fixture(autouse=True)
-def clean_db():
+def clean_db(monkeypatch):
+    monkeypatch.setenv("ADMIN_EMAIL", ADMIN["email"])
+    monkeypatch.setenv("ADMIN_PASSWORD", ADMIN["password"])
+    auth.reset_login_throttle()
     db.init_db(reset=True)
+    auth.ensure_admin()
+    r = client.post("/auth/login", json=ADMIN)
+    if r.status_code == 200:
+        client.headers["Authorization"] = f"Bearer {r.json()['token']}"
     yield
+    client.headers.pop("Authorization", None)
 
 
 def test_health():
