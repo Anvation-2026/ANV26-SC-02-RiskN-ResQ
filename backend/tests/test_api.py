@@ -26,6 +26,7 @@ def login_as(c, creds):
 def client(tmp_path, monkeypatch):
     """A TestClient signed in as the Super Admin (so the disaster-response tests can use every endpoint)."""
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "test.db")
+    monkeypatch.setattr(main, "PHOTO_DIR", tmp_path / "uploads")  # never write test photos into the real uploads folder
     monkeypatch.setenv("ADMIN_EMAIL", ADMIN["email"])
     monkeypatch.setenv("ADMIN_PASSWORD", ADMIN["password"])
     auth.reset_login_throttle()

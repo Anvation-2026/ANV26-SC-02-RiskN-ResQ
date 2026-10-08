@@ -1,5 +1,9 @@
 import json
+import os
 import re
+import secrets
+import shutil
+from pathlib import Path
 import logging
 import sqlite3
 from contextlib import asynccontextmanager
@@ -9,7 +13,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 import auth
@@ -31,6 +35,11 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="RiskN ResQ API", version="2.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+# Incident photos are stored on local disk (demo-safe; swap for object storage in production).
+PHOTO_DIR = Path(os.environ.get("RISKNRESQ_UPLOADS", Path(__file__).parent / "uploads"))
+MAX_PHOTO_BYTES = 5 * 1024 * 1024
+PHOTO_TYPES = {"jpg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
 
 IncidentType = Literal["FLOOD", "BLOCKED_ROAD", "EMERGENCY"]
 IncidentStatus = Literal["REPORTED", "VERIFIED", "REJECTED", "RESOLVED"]
@@ -83,7 +92,8 @@ def incident_out(c, r, include_user: bool = False) -> dict:
     return {"id": r["id"], "type": r["type"], "latitude": r["latitude"], "longitude": r["longitude"],
             "description": r["description"], "severity": r["severity"], "trust_score": compute_trust(c, r),
             "similar_reports": similar_count(c, r), "status": r["status"], "zone": r["zone"],
-            "user_id": r["user_id"] if include_user else None, "timestamp": r["timestamp"]}
+            "user_id": r["user_id"] if include_user else None, "timestamp": r["timestamp"],
+            "has_photo": bool(r["photo_file"])}
 
 
 def road_out(r) -> dict:
@@ -125,6 +135,9 @@ def health():
 def reset(_: dict = Depends(auth.require_admin)):
     """Restore the seeded demo state: LOW risk, all roads AVAILABLE, no alerts. Atomic."""
     db.reset_db()
+    if PHOTO_DIR.is_dir():
+        for f in PHOTO_DIR.glob("incident_*"):  # the incidents they belonged to are gone
+            f.unlink(missing_ok=True)
     with db.session() as c:
         risks = refresh_all(c)
         alerts = c.execute("SELECT COUNT(*) FROM alerts WHERE active=1").fetchone()[0]
@@ -189,6 +202,61 @@ def list_incidents(status: Optional[IncidentStatus] = None, type: Optional[Incid
 def get_incident(incident_id: int, user: dict = Depends(auth.current_user)):
     with db.session() as c:
         return incident_out(c, one(c, "incidents", incident_id, "Incident"), user["role"] == auth.ROLE_ADMIN)
+
+
+def sniff_image(data: bytes):
+    """Decide the type from the file's own bytes (the client-sent type is never trusted)."""
+    if data.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
+def _own_incident(c, incident_id: int, user: dict):
+    r = one(c, "incidents", incident_id, "Incident")
+    if user["role"] != auth.ROLE_ADMIN and r["user_id"] != user["id"]:
+        raise HTTPException(404, f"Incident {incident_id} not found")
+    return r
+
+
+@app.post("/incidents/{incident_id}/photo", status_code=201)
+async def upload_incident_photo(incident_id: int, request: Request, user: dict = Depends(auth.current_user)):
+    """Raw image bytes in the request body (JPEG, PNG or WebP, max 5 MB). Reporter or admin only; one photo per incident."""
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > MAX_PHOTO_BYTES:
+        raise HTTPException(413, "Photo is too large (max 5 MB).")
+    data = await request.body()
+    if not data:
+        raise HTTPException(422, "No image data received.")
+    if len(data) > MAX_PHOTO_BYTES:
+        raise HTTPException(413, "Photo is too large (max 5 MB).")
+    ext = sniff_image(data)
+    if not ext:
+        raise HTTPException(415, "Unsupported file. Please upload a JPEG, PNG or WebP image.")
+    with db.session() as c:
+        r = _own_incident(c, incident_id, user)
+        if r["photo_file"]:
+            raise HTTPException(409, "This incident already has a photo.")
+        PHOTO_DIR.mkdir(parents=True, exist_ok=True)
+        name = f"incident_{incident_id}_{secrets.token_hex(8)}.{ext}"  # server-chosen name: no client path ever used
+        (PHOTO_DIR / name).write_bytes(data)
+        c.execute("UPDATE incidents SET photo_file=? WHERE id=?", (name, incident_id))
+    return {"incident_id": incident_id, "stored": True, "content_type": PHOTO_TYPES[ext], "size_bytes": len(data)}
+
+
+@app.get("/incidents/{incident_id}/photo")
+def get_incident_photo(incident_id: int, user: dict = Depends(auth.current_user)):
+    with db.session() as c:
+        r = _own_incident(c, incident_id, user)
+        name = r["photo_file"]
+    path = PHOTO_DIR / name if name else None
+    if not path or not path.is_file():
+        raise HTTPException(404, "This incident has no photo.")
+    return FileResponse(path, media_type=PHOTO_TYPES.get(path.suffix.lstrip("."), "application/octet-stream"),
+                        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=300"})
 
 
 class StatusIn(BaseModel):
@@ -394,7 +462,7 @@ def login(body: LoginIn):
             raise HTTPException(403, "This account has been disabled. Contact an administrator.")
         token, expires = auth.create_session(c, row["id"])
         user = auth.user_public(row)
-    auth._failures.pop(email, None)
+    auth.clear_failures(email)
     return {"token": token, "token_type": "bearer", "expires_at": expires, "user": user}
 
 

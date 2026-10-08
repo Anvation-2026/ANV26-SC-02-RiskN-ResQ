@@ -45,23 +45,31 @@ def verify_password(password: str, stored: Optional[str]) -> bool:
 
 _DUMMY_HASH = hash_password("timing-equaliser")  # unknown emails still cost one hash, so timing doesn't reveal them
 
-# ---------- login throttling (in memory, per email) ----------
-
-_failures: dict = {}
-
+# ---------- login throttling (stored in SQLite, so a backend restart does not clear it) ----------
 
 def reset_login_throttle() -> None:
-    _failures.clear()
+    try:
+        with db.session() as c:
+            c.execute("DELETE FROM login_failures")
+    except Exception:  # table not created yet
+        pass
 
 
 def throttled(email: str) -> bool:
-    recent = [t for t in _failures.get(email, []) if time.time() - t < LOCKOUT_SECONDS]
-    _failures[email] = recent
-    return len(recent) >= MAX_FAILED_LOGINS
+    with db.session() as c:
+        c.execute("DELETE FROM login_failures WHERE at < ?", (time.time() - LOCKOUT_SECONDS,))
+        n = c.execute("SELECT COUNT(*) FROM login_failures WHERE email=?", (email,)).fetchone()[0]
+    return n >= MAX_FAILED_LOGINS
 
 
 def record_failure(email: str) -> None:
-    _failures.setdefault(email, []).append(time.time())
+    with db.session() as c:
+        c.execute("INSERT INTO login_failures(email, at) VALUES(?,?)", (email, time.time()))
+
+
+def clear_failures(email: str) -> None:
+    with db.session() as c:
+        c.execute("DELETE FROM login_failures WHERE email=?", (email,))
 
 
 # ---------- sessions ----------

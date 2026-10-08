@@ -105,6 +105,26 @@ def test_login_is_throttled_after_repeated_failures(client):
     assert c.post("/auth/login", json={"email": "alice@test.local", "password": PW}).status_code == 429
 
 
+def test_login_throttle_survives_a_backend_restart(client):
+    register(anon())
+    for _ in range(5):
+        assert anon().post("/auth/login", json={"email": "alice@test.local", "password": "bad-password"}).status_code == 401
+    with TestClient(main.app) as restarted:  # the app starts again on the same database file
+        r = restarted.post("/auth/login", json={"email": "alice@test.local", "password": PW})
+        assert r.status_code == 429
+    auth.reset_login_throttle()
+    assert anon().post("/auth/login", json={"email": "alice@test.local", "password": PW}).status_code == 200
+
+
+def test_successful_login_clears_earlier_failures(client):
+    register(anon())
+    for _ in range(4):
+        anon().post("/auth/login", json={"email": "alice@test.local", "password": "bad-password"})
+    assert anon().post("/auth/login", json={"email": "alice@test.local", "password": PW}).status_code == 200
+    for _ in range(4):  # counter started again from zero
+        assert anon().post("/auth/login", json={"email": "alice@test.local", "password": "bad-password"}).status_code == 401
+
+
 def test_admin_account_comes_from_environment_only(tmp_path, monkeypatch):
     import db
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "noadmin.db")

@@ -17,13 +17,17 @@ CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'user',
     latitude REAL, longitude REAL, email TEXT, password_hash TEXT, phone TEXT,
     created_at TEXT, is_active INTEGER NOT NULL DEFAULT 1);
+CREATE TABLE IF NOT EXISTS login_failures (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL, at REAL NOT NULL);
+CREATE INDEX IF NOT EXISTS ix_login_failures_email ON login_failures(email);
 CREATE TABLE IF NOT EXISTS sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, token_hash TEXT NOT NULL UNIQUE,
     created_at TEXT NOT NULL, expires_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS incidents (
     id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, latitude REAL NOT NULL, longitude REAL NOT NULL,
     description TEXT DEFAULT '', severity INTEGER NOT NULL DEFAULT 3, trust_score INTEGER NOT NULL DEFAULT 50,
-    status TEXT NOT NULL DEFAULT 'REPORTED', zone TEXT, user_id INTEGER, timestamp TEXT NOT NULL);
+    status TEXT NOT NULL DEFAULT 'REPORTED', zone TEXT, user_id INTEGER, timestamp TEXT NOT NULL,
+    photo_file TEXT);
 CREATE TABLE IF NOT EXISTS roads (
     id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, coordinates TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'AVAILABLE');
@@ -48,6 +52,7 @@ CREATE TABLE IF NOT EXISTS environment_data (
 
 # Columns added after the first release: older database files are upgraded in place.
 MIGRATIONS = {
+    "incidents": [("photo_file", "TEXT")],
     "users": [("email", "TEXT"), ("password_hash", "TEXT"), ("phone", "TEXT"), ("created_at", "TEXT"),
               ("is_active", "INTEGER NOT NULL DEFAULT 1")],
     "volunteers": [("user_id", "INTEGER"), ("status", "TEXT NOT NULL DEFAULT 'ACTIVE'")],
