@@ -185,13 +185,13 @@ export async function updateVolunteerLocation(volunteerId, latitude, longitude) 
 let lastMatch = null;
 export const getMatch = () => lastMatch;
 
-export async function requestHelp({ type, priority = 'HIGH', latitude, longitude }) {
+export async function requestHelp({ type, priority = 'HIGH', latitude, longitude, userId }) {
   if (typeof latitude !== 'number' || typeof longitude !== 'number') {
     throw new Error('GPS coordinates are required to request emergency assistance.');
   }
 
   const body = {
-    userId: 1,
+    ...(userId != null ? { userId } : {}), // the signed-in user's own id (no hard-coded user)
     type,
     priority,
     latitude,
@@ -201,6 +201,16 @@ export async function requestHelp({ type, priority = 'HIGH', latitude, longitude
   const response = await http('/help-requests', { method: 'POST', body });
   lastMatch = response;
   return response;
+}
+
+// ── Admin-managed state shown to every user (public read endpoints) ──────────
+export async function getZoneAlerts() {
+  const raw = await http('/alerts?active_only=true');
+  return raw.filter((a) => a.active !== false);
+}
+
+export async function getRoadStatus() {
+  return await http('/roads');
 }
 
 // ── 7. DEMO / DEVELOPMENT CONTROLS ──────────────────────────────────────

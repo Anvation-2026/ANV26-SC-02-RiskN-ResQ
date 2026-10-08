@@ -8,26 +8,35 @@ import ActionButton from './ActionButton';
 const Field = ({ label, value }) => (
   <View style={styles.field}>
     <Text style={styles.fl}>{label}</Text>
-    <Text style={styles.fv} numberOfLines={1}>{value}</Text>
+    <Text style={styles.fv} numberOfLines={2}>{value}</Text>
   </View>
 );
 
 export default function AlertCard({ alert, road, onViewRoute }) {
+  const level = alert.severity === 'MODERATE' ? 'MEDIUM' : alert.severity;
   const c = riskColor(alert.severity);
+  const urgent = level === 'HIGH' || level === 'CRITICAL';
+  const area = alert.affected_zone || alert.zone || 'Monitored area';
+  const roadText = alert.affected_road || road || 'None reported';
+  const when = timeAgo(alert.created_at || alert.createdAt);
 
   return (
-    <View style={[styles.card, { borderLeftColor: c }]}>
+    <View style={[styles.card, { borderLeftColor: c }, urgent && { backgroundColor: c + '0D', borderColor: c + '55' }]}>
       <View style={styles.headerRow}>
-        <Feather name="alert-octagon" size={16} color={c} style={{ marginRight: 6 }} />
-        <Text style={[styles.title, { color: c }]}>{alert.severity} FLOOD RISK</Text>
+        <Feather name={urgent ? 'alert-octagon' : 'alert-circle'} size={16} color={c} style={{ marginRight: 6 }} />
+        <Text style={[styles.title, { color: c }]}>{level} FLOOD RISK</Text>
+        {alert.drill ? (
+          <View style={styles.drill}><Text style={styles.drillText}>SIMULATED</Text></View>
+        ) : null}
       </View>
 
       <Text style={styles.msg}>{alert.message}</Text>
 
       <View style={styles.fields}>
-        <Field label="Affected Area" value={alert.zone} />
-        <Field label="Corridor" value={road || 'None reported'} />
-        <Field label="Telemetry" value={timeAgo(alert.createdAt)} />
+        {alert.reason ? <Field label="Reason" value={alert.reason} /> : null}
+        <Field label="Affected Area" value={area} />
+        <Field label="Affected Road" value={roadText} />
+        <Field label="Updated" value={when} />
       </View>
 
       {onViewRoute ? (
@@ -43,6 +52,8 @@ export default function AlertCard({ alert, road, onViewRoute }) {
 }
 
 const styles = StyleSheet.create({
+  drill: { marginLeft: 8, backgroundColor: '#EDE9FE', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 },
+  drillText: { color: '#6D28D9', fontSize: 10, fontFamily: 'PlusJakartaSans_800ExtraBold', letterSpacing: 0.6 },
   card: {
     backgroundColor: colors.card,
     borderRadius: radius.card,

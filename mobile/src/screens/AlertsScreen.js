@@ -11,7 +11,8 @@ import { colors, radius, shadow } from '../theme';
 
 export default function AlertsScreen({ navigate }) {
   const insets = useSafeAreaInsets();
-  const { alerts, blocked, loading } = useData();
+  const { alerts, blocked, loading, source, backendError } = useData();
+  const urgentCount = alerts.filter((a) => a.severity === 'HIGH' || a.severity === 'CRITICAL').length;
   const road = blocked.length ? blocked.map((r) => r.name).join(', ') : null;
 
   return (
@@ -25,8 +26,14 @@ export default function AlertsScreen({ navigate }) {
         showsVerticalScrollIndicator={false}
       >
         <ConnectionBanner />
+        {!loading && alerts.length > 0 ? (
+          <Text style={[styles.summary, urgentCount > 0 && { color: colors.HIGH }]}>
+            {alerts.length} active alert{alerts.length > 1 ? 's' : ''}
+            {urgentCount > 0 ? ` · ${urgentCount} high or critical` : ''}
+          </Text>
+        ) : null}
         {loading ? (
-          <Text style={styles.muted}>Loading telemetry alerts...</Text>
+          <Text style={styles.muted}>Loading alerts...</Text>
         ) : alerts.length ? (
           alerts.map((a) => (
             <AlertCard
@@ -51,6 +58,7 @@ export default function AlertsScreen({ navigate }) {
 }
 
 const styles = StyleSheet.create({
+  summary: { fontFamily: 'PlusJakartaSans_800ExtraBold', fontSize: 13, color: colors.muted, marginBottom: 10 },
   emptySymbol: { width: 64, height: 64, borderRadius: 16, marginBottom: 10 },
   root: {
     flex: 1,

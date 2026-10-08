@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import Header from '../../components/Header';
 import ActionButton from '../../components/ActionButton';
 import { Chip } from '../ReportScreen';
@@ -44,6 +44,7 @@ export default function AdminPeople() {
   return (
     <View style={{ flex: 1 }}>
       <Header title="People" subtitle="Volunteers and user accounts" />
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
         <Segmented options={[['volunteers', 'Volunteers'], ['users', 'All users']]} value={tab} onChange={setTab} />
         <ErrorText>{error || vols.error || users.error}</ErrorText>
@@ -112,6 +113,7 @@ export default function AdminPeople() {
           </Card>
         ))}
       </ScrollView>
+      </KeyboardAvoidingView>
     </View>
   );
 }

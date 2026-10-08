@@ -6,6 +6,7 @@ import MatchCard from './MatchCard';
 import { RESOURCES, useResponse } from '../context/ResponseContext';
 import { useData } from '../context/DataContext';
 import { getRiskLevelColor } from '../features/disaster-response/services/geofencing';
+import { ROUTE_NOTE } from '../services/copy';
 import { colors, radius, shadow } from '../theme';
 
 const Chip = ({ active, onPress, children }) => (
@@ -128,12 +129,12 @@ export default function ResponsePanel() {
                 </Text>
               </View>
             )}
-            <Text style={styles.note}>{route.safetyNote}</Text>
+            <Text style={styles.note}>{ROUTE_NOTE}</Text>
           </View>
         )}
 
         {route && !route.success && (
-          <Text style={styles.warn}>{route.reason || 'No route found'}. {route.safetyNote || ''}</Text>
+          <Text style={styles.warn}>{route.reason || 'No route found'}. {ROUTE_NOTE}</Text>
         )}
       </Card>
 

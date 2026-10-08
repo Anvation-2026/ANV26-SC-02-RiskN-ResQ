@@ -2,7 +2,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Platform, StyleSheet, Text, View } from 'react-native';
 import { colors, riskColor } from '../theme';
-import { USER, ZONES } from '../services/geo';
+// Fallback point used only when no location is available (the real position comes from the `user` prop).
+const DEFAULT_POINT = { latitude: 12.9716, longitude: 77.5946 };
 
 // Schematic map: real lat/lng projected onto a canvas. No map SDK needed.
 // Two modes: live backend data (default) or the disaster-response scenario, enabled by
@@ -30,10 +31,24 @@ const Marker = ({ p, children, style }) => (
   </View>
 );
 
+// One bad coordinate (undefined, null, NaN, a string) must never take the whole map down: drop it instead.
+const ok = (lat, lng) => typeof lat === 'number' && typeof lng === 'number' && Number.isFinite(lat) && Number.isFinite(lng);
+const okPair = (c) => (Array.isArray(c) ? ok(c[0], c[1]) : !!c && ok(c.latitude, c.longitude));
+const toPair = (c) => (Array.isArray(c) ? [c[0], c[1]] : [c.latitude, c.longitude]);
+
 export default function MapView({
-  risk, roads, blocked, alternative, incidents = [], height = 340,
-  zones, routeLine, markers = [], user, labelBlockedOnly = false,
+  risk, roads: rawRoads, blocked: rawBlocked, alternative, incidents: rawIncidents, height = 340,
+  zones: rawZones, routeLine: rawRoute, markers: rawMarkers, user: rawUser, labelBlockedOnly = false,
 }) {
+  const roads = (Array.isArray(rawRoads) ? rawRoads : [])
+    .map((r) => ({ ...r, coordinates: Array.isArray(r.coordinates) ? r.coordinates.filter(okPair).map(toPair) : [] }))
+    .filter((r) => r.coordinates.length > 1);
+  const blocked = Array.isArray(rawBlocked) ? rawBlocked : [];
+  const incidents = (Array.isArray(rawIncidents) ? rawIncidents : []).filter((i) => ok(i.latitude, i.longitude));
+  const markers = (Array.isArray(rawMarkers) ? rawMarkers : []).filter((m) => ok(m.latitude, m.longitude));
+  const zones = Array.isArray(rawZones) ? rawZones.filter((z) => ok(z.latitude, z.longitude)) : undefined;
+  const routeLine = Array.isArray(rawRoute) ? rawRoute.filter(okPair).map(toPair) : undefined;
+  const user = rawUser && ok(rawUser.latitude, rawUser.longitude) ? rawUser : undefined;
   const [size, setSize] = useState({ w: 0, h: height });
   const pulse = useRef(new Animated.Value(0)).current;
 
@@ -43,16 +58,16 @@ export default function MapView({
     return () => loop.stop();
   }, [pulse]);
 
-  const me = user || USER;
+  const me = user || DEFAULT_POINT;
   const level = risk ? risk.level : 'LOW';
-  const zoneCenter = ZONES[risk?.zone] || USER;
+  const zoneCenter = me; // risk zone is drawn around the user's position
   // Zones to draw: scenario zones if given, otherwise the single backend risk zone.
   const zoneList = useMemo(
     () => zones || [{ latitude: zoneCenter.latitude, longitude: zoneCenter.longitude, radiusKm: ZONE_RADIUS_KM[level], level }],
     [zones, level, zoneCenter.latitude, zoneCenter.longitude]
   );
-  const blockedIds = new Set(blocked.map((r) => r.id));
-  const altId = alternative ? alternative.road.id : null;
+  const blockedIds = new Set(blocked.map((r) => r && r.id));
+  const altId = alternative && alternative.road ? alternative.road.id : null;
   const liveIncidents = incidents.filter((i) => !['REJECTED', 'RESOLVED'].includes(i.status)).slice(0, 12);
 
   const project = useMemo(() => {
@@ -91,7 +106,7 @@ export default function MapView({
   const render = () => {
     if (!project) return null;
     const u = project(me.latitude, me.longitude);
-    const ordered = [...roads].sort((a, b) => (blockedIds.has(a.id) ? 1 : 0) - (blockedIds.has(b.id) ? 1 : 0));
+    const ordered = [...roads].filter((r) => Array.isArray(r.coordinates) && r.coordinates.length > 1).sort((a, b) => (a.status === 'BLOCKED' ? 1 : 0) - (b.status === 'BLOCKED' ? 1 : 0));
     const routePts = (routeLine || []).map((c) => project(c[0], c[1]));
     return (
       <>
@@ -101,7 +116,7 @@ export default function MapView({
         })}
         {ordered.map((r) => {
           const pts = r.coordinates.map((c) => project(c[0], c[1]));
-          const isBlocked = blockedIds.has(r.id), isAlt = r.id === altId;
+          const isBlocked = blockedIds.has(r.id) || r.status === 'BLOCKED', isAlt = r.id === altId;
           const color = isBlocked ? colors.HIGH : isAlt ? colors.route : '#94A3B8';
           const w = isBlocked || isAlt ? 8 : 6;
           const mid = pts[Math.floor(pts.length / 2)];

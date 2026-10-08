@@ -16,7 +16,7 @@ export default class ErrorBoundary extends React.Component {
 
   componentDidCatch(error, errorInfo) {
     if (__DEV__) {
-      console.warn('ErrorBoundary caught an error:', error, errorInfo);
+      console.error('[ErrorBoundary] ' + (error && error.message), (error && error.stack) || '', (errorInfo && errorInfo.componentStack) || '');
     }
   }
 

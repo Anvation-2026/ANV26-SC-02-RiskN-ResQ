@@ -35,10 +35,12 @@ export default function HomeScreen({ navigate }) {
     risk,
     weather,
     incidents,
+    alerts,
     blocked,
     source,
     lastUpdated,
     requestPermission,
+    applyManualLocation,
   } = useData();
 
   const [ticker, setTicker] = useState(0);
@@ -53,13 +55,7 @@ export default function HomeScreen({ navigate }) {
   const [title, body] = TEXT[currentLevel] || TEXT.LOW;
 
   const activeIncidents = incidents.filter((i) => i.status !== 'RESOLVED');
-  const topAlert = activeIncidents.length > 0 ? {
-    id: activeIncidents[0].id,
-    severity: activeIncidents[0].severity,
-    message: activeIncidents[0].description || `${activeIncidents[0].type.replace('_', ' ')} reported`,
-    zone: locationLabel,
-    createdAt: activeIncidents[0].timestamp || activeIncidents[0].created_at,
-  } : null;
+  const topAlert = alerts.length > 0 ? alerts[0] : null; // strongest active alert (zone alert or reported incident)
 
   const isPermissionDenied = locationStatus === 'denied' || locationStatus === 'error';
 
@@ -101,6 +97,9 @@ export default function HomeScreen({ navigate }) {
               <Feather name="crosshair" size={14} color="#FFFFFF" style={{ marginRight: 6 }} />
               <Text style={styles.enableBtnText}>Enable Location</Text>
             </Pressable>
+            <Pressable style={styles.manualBtn} onPress={() => applyManualLocation(12.9716, 77.5946, 'Bengaluru (manual location)')}>
+              <Text style={styles.manualBtnText}>Use Bengaluru instead (manual location)</Text>
+            </Pressable>
           </View>
         )}
 
@@ -112,6 +111,8 @@ export default function HomeScreen({ navigate }) {
                   score: risk.score ?? risk.risk_score ?? 0,
                   level: currentLevel,
                   reason: risk.reason,
+                  drill: risk.drill,
+                  zoneAlert: risk.zoneAlert,
                 }
               : null
           }
@@ -218,8 +219,14 @@ export default function HomeScreen({ navigate }) {
           />
           <View style={styles.sep} />
           <Row
-            label="Blocked Corridors"
-            value={blocked.length ? `${blocked.length} Active Blockage${blocked.length > 1 ? 's' : ''}` : 'None reported'}
+            label="Affected Area"
+            value={topAlert ? (topAlert.affected_zone || 'Monitored area') : 'None'}
+            color={topAlert ? colors.HIGH : colors.LOW}
+          />
+          <View style={styles.sep} />
+          <Row
+            label="Blocked Road"
+            value={blocked.length ? blocked.slice(0, 2).map((b) => b.name).join(', ') + (blocked.length > 2 ? ` +${blocked.length - 2}` : '') : 'None reported'}
             color={blocked.length ? colors.HIGH : colors.LOW}
           />
         </View>
@@ -229,6 +236,8 @@ export default function HomeScreen({ navigate }) {
 }
 
 const styles = StyleSheet.create({
+  manualBtn: { marginTop: 10, alignItems: 'center', paddingVertical: 8 },
+  manualBtnText: { color: '#991B1B', fontSize: 13, fontFamily: 'PlusJakartaSans_700Bold', textDecorationLine: 'underline' },
   container: {
     flex: 1,
     backgroundColor: colors.bg,

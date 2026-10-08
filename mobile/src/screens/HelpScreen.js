@@ -45,9 +45,10 @@ export default function HelpScreen({ navigate }) {
     setErrorMsg(null);
     try {
       const matchRes = await requestResource(type, priority);
-      setResult(matchRes);
+      if (matchRes && matchRes.failed) setErrorMsg(matchRes.message); // a failed request is an error, never a "queued" request
+      else setResult(matchRes);
     } catch (e) {
-      setErrorMsg('Emergency dispatch request timed out. Please retry.');
+      setErrorMsg('Could not send your request. Please try again.');
     } finally {
       setBusy(false);
     }
@@ -99,9 +100,9 @@ export default function HelpScreen({ navigate }) {
             ) : (
               <View style={styles.none}>
                 <Feather name="info" size={24} color="#D97706" style={{ marginBottom: 6 }} />
-                <Text style={styles.noneTitle}>Request Queued</Text>
+                <Text style={styles.noneTitle}>No suitable nearby resource found.</Text>
                 <Text style={styles.noneBody}>
-                  {result.message || 'No active volunteer currently matches this resource in your immediate radius. Your request remains open and will trigger dispatch once supplies become available.'}
+                  Your request was recorded and stays open. It will be matched when a suitable volunteer becomes available.
                 </Text>
                 <View style={{ alignSelf: 'stretch', marginTop: 14 }}>
                   <ActionButton

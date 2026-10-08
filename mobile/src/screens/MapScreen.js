@@ -16,6 +16,7 @@ import ResponsePanel from '../components/ResponsePanel';
 import ErrorBoundary from '../components/ErrorBoundary';
 import { useResponse } from '../context/ResponseContext';
 import { useData } from '../context/DataContext';
+import { ROUTE_NOTE } from '../services/copy';
 import { colors, radius, shadow } from '../theme';
 
 const MODES = [
@@ -26,7 +27,7 @@ const MODES = [
 export default function MapScreen() {
   const insets = useSafeAreaInsets();
   const { height: screenHeight } = useWindowDimensions();
-  const { userLocation, risk, blocked, alternative, incidents, locationLabel } = useData();
+  const { userLocation, risk, blocked, roads, alternative, incidents, locationLabel } = useData();
   const [mode, setMode] = useState('live');
   const R = useResponse();
 
@@ -122,6 +123,7 @@ export default function MapScreen() {
           <View style={styles.mapWrapper}>
             <MapView
               risk={risk}
+              roads={roads}
               blocked={blocked}
               alternative={alternative}
               incidents={incidents}
@@ -206,7 +208,7 @@ export default function MapScreen() {
 
             <View style={styles.noteDivider} />
             <Text style={styles.note}>
-              Recommended alternative route based on available route and incident data.
+              {ROUTE_NOTE}
             </Text>
           </View>
         )}

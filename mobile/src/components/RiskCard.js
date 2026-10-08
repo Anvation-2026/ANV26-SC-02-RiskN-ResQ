@@ -28,6 +28,7 @@ export default function RiskCard({ risk }) {
 
       <View style={styles.middleRow}>
         <Text style={styles.level} numberOfLines={1}>{risk.level}</Text>
+        {risk.drill ? <Text style={styles.drillNote}>SIMULATED DRILL: not a real warning</Text> : risk.zoneAlert ? <Text style={styles.drillNote}>Raised by an active zone alert</Text> : null}
         <Text style={styles.subtext}>
           {risk.level === 'CRITICAL' || risk.level === 'HIGH'
             ? 'Elevated flood risk in your area'
@@ -45,6 +46,7 @@ export default function RiskCard({ risk }) {
 }
 
 const styles = StyleSheet.create({
+  drillNote: { color: '#FFFFFF', backgroundColor: 'rgba(0,0,0,0.25)', alignSelf: 'flex-start', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3, fontSize: 11, fontFamily: 'PlusJakartaSans_700Bold', marginTop: 4, overflow: 'hidden' },
   card: {
     borderRadius: radius.card,
     paddingHorizontal: 16,

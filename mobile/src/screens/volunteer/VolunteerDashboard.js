@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { symbols } from '../../assets';
 import Header from '../../components/Header';
 import ActionButton from '../../components/ActionButton';
 import { Card, ErrorText, Label, Pill, SmallButton, statusColor } from '../../components/ui';
@@ -64,7 +65,7 @@ export default function VolunteerDashboard() {
                 {a.distance_km != null ? <Text style={styles.line}>Distance: <Text style={styles.strong}>{formatDistance(a.distance_km)}</Text></Text> : null}
                 {a.requester_name ? <Text style={styles.line}>Requester: <Text style={styles.strong}>{a.requester_name}{a.requester_phone ? ` · ${a.requester_phone}` : ''}</Text></Text> : null}
                 <View style={{ marginTop: 12 }}>
-                  {a.match_status === 'PROPOSED' && <ActionButton variant="primary" label="ACCEPT REQUEST" disabled={busy} onPress={() => act(() => acceptMatch(a.match_id))} />}
+                  {(a.match_status === 'PROPOSED' || a.match_status === 'MATCHED') && <ActionButton variant="primary" label="ACCEPT REQUEST" disabled={busy} onPress={() => act(() => acceptMatch(a.match_id))} />}
                   {a.match_status === 'ACCEPTED' && <ActionButton variant="primary" label="MARK COMPLETED" color={colors.LOW} disabled={busy} onPress={() => act(() => completeMatch(a.match_id))} />}
                 </View>
               </Card>
@@ -82,12 +83,28 @@ export default function VolunteerDashboard() {
             ))}
           </>
         )}
+        <Text style={styles.section}>Account</Text>
+        <Card>
+          <View style={styles.accountRow}>
+            <Image source={symbols.verified} style={styles.accountSymbol} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.title}>{user.name}</Text>
+              <Text style={styles.line}>{user.email}</Text>
+              <View style={{ marginTop: 6 }}><Pill text="VOLUNTEER" color={colors.primary} /></View>
+            </View>
+          </View>
+          <View style={{ marginTop: 12 }}>
+            <ActionButton variant="primary" label="LOG OUT" color={colors.navy} onPress={logout} />
+          </View>
+        </Card>
       </ScrollView>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  accountRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  accountSymbol: { width: 44, height: 44, borderRadius: 12 },
   body: { padding: 16, paddingBottom: 40 },
   rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 },
   stats: { flexDirection: 'row', gap: 10, marginTop: 16, marginBottom: 10 },

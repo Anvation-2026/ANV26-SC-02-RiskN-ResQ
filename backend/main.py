@@ -725,7 +725,7 @@ def _disable_volunteer(c, v):
     if v["user_id"]:
         c.execute("UPDATE users SET is_active=0 WHERE id=?", (v["user_id"],))
         auth.revoke_user_sessions(c, v["user_id"])
-    for m in c.execute("SELECT * FROM matches WHERE volunteer_id=? AND status IN ('PROPOSED','ACCEPTED')", (v["id"],)).fetchall():
+    for m in c.execute("SELECT * FROM matches WHERE volunteer_id=? AND status IN ('PROPOSED','MATCHED','ACCEPTED')", (v["id"],)).fetchall():
         c.execute("UPDATE matches SET status='CANCELLED' WHERE id=?", (m["id"],))
         c.execute("UPDATE help_requests SET status='OPEN' WHERE id=? AND status='MATCHED'", (m["help_request_id"],))
 
@@ -784,7 +784,7 @@ def _my_row(c, user: dict):
 
 def _my_requests(c, v):
     assigned = []
-    for m in c.execute("SELECT * FROM matches WHERE volunteer_id=? AND status IN ('PROPOSED','ACCEPTED') ORDER BY id DESC", (v["id"],)):
+    for m in c.execute("SELECT * FROM matches WHERE volunteer_id=? AND status IN ('PROPOSED','MATCHED','ACCEPTED') ORDER BY id DESC", (v["id"],)):
         r = c.execute("SELECT * FROM help_requests WHERE id=?", (m["help_request_id"],)).fetchone()
         who = c.execute("SELECT name, phone FROM users WHERE id=?", (r["user_id"],)).fetchone() if r and dict(r).get("user_id") else None
         dist = None
@@ -1199,8 +1199,9 @@ def _match_action(match_id: int, user: dict, expect: str, new_status: str):
             mine = c.execute("SELECT 1 FROM volunteers WHERE id=? AND user_id=?", (m["volunteer_id"], user["id"])).fetchone()
             if not mine:
                 raise HTTPException(404, f"Match {match_id} not found")
-        if m["status"] != expect:
-            raise HTTPException(409, f"Match is {m['status']}; it must be {expect} to do this.")
+        allowed = (expect,) if isinstance(expect, str) else tuple(expect)
+        if m["status"] not in allowed:
+            raise HTTPException(409, f"Match is {m['status']}; it must be {' or '.join(allowed)} to do this.")
         c.execute("UPDATE matches SET status=? WHERE id=?", (new_status, match_id))
         if new_status == "COMPLETED":
             c.execute("UPDATE help_requests SET status='COMPLETED' WHERE id=?", (m["help_request_id"],))
@@ -1209,7 +1210,8 @@ def _match_action(match_id: int, user: dict, expect: str, new_status: str):
 
 @app.post("/matches/{match_id}/accept")
 def accept_match(match_id: int, user: dict = Depends(auth.require_roles(auth.ROLE_VOLUNTEER, auth.ROLE_ADMIN))):
-    return _match_action(match_id, user, "PROPOSED", "ACCEPTED")
+    # matches saved by help-request matching start as MATCHED; manually proposed ones as PROPOSED
+    return _match_action(match_id, user, ("PROPOSED", "MATCHED"), "ACCEPTED")
 
 
 @app.post("/matches/{match_id}/complete")
@@ -1234,7 +1236,7 @@ def admin_summary(_: dict = Depends(auth.require_admin)):
             "blocked_roads": roads_blocked,
             "pending_help_requests": n("SELECT COUNT(*) FROM help_requests WHERE status='OPEN'"),
             "available_volunteers": n("SELECT COUNT(*) FROM volunteers WHERE status='ACTIVE' AND available=1"),
-            "open_matches": n("SELECT COUNT(*) FROM matches WHERE status IN ('PROPOSED','ACCEPTED')"),
+            "open_matches": n("SELECT COUNT(*) FROM matches WHERE status IN ('PROPOSED','MATCHED','ACCEPTED')"),
             "users": {role: n(f"SELECT COUNT(*) FROM users WHERE role='{role}'") for role in (auth.ROLE_USER, auth.ROLE_VOLUNTEER, auth.ROLE_ADMIN)},
             "notice": DATA_NOTICE,
         }

@@ -1,14 +1,30 @@
 import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
 import { useData } from './DataContext';
+import { useAuth } from './AuthContext';
 import { computeRoute as apiComputeRoute, requestHelp as apiRequestHelp } from '../services/api';
 
 const ResponseContext = createContext(null);
 export const useResponse = () => useContext(ResponseContext);
 
+// The backend stores a volunteer's extra resources as a JSON list text ("[]" when empty). Never show that raw text:
+// use the listed resources if there are any, otherwise the volunteer's main skill.
+export function cleanResource(v) {
+  const raw = v && (v.resources != null ? v.resources : v.resource);
+  let list = [];
+  if (Array.isArray(raw)) list = raw;
+  else if (typeof raw === 'string' && raw.trim() && raw.trim() !== '[]') {
+    try { const parsed = JSON.parse(raw); list = Array.isArray(parsed) ? parsed : [String(parsed)]; } catch (e) { list = [raw]; }
+  }
+  const names = list.map((x) => String(x).trim()).filter(Boolean);
+  const text = names.length ? names.join(', ') : (v && v.skill) || 'Assistance';
+  return text.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase());
+}
+
 export const RESOURCES = ['Medicine', 'Food', 'Water', 'First Aid', 'Evacuation'];
 
 export function ResponseProvider({ children }) {
   const { userLocation, risk, volunteers: liveVolunteers, blocked, refresh } = useData();
+  const { user } = useAuth();
 
   const [resource, setResource] = useState('Medicine');
   const [match, setMatch] = useState(null);
@@ -45,7 +61,12 @@ export function ResponseProvider({ children }) {
         const firstVol = liveVolunteers[0];
         return requestRoute({ latitude: firstVol.latitude, longitude: firstVol.longitude });
       }
-      return null;
+      const none = {
+        success: false, distanceKm: 0, etaMinutes: 0, coordinates: [], blockedRoads: [],
+        reason: 'No destination is available yet. Request help first, or wait for a nearby responder.',
+      };
+      setRoute(none);
+      return none;
     }
 
     setIsRouting(true);
@@ -87,8 +108,12 @@ export function ResponseProvider({ children }) {
         return failedRoute;
       }
     } catch (err) {
-      console.warn('Route computation error:', err);
-      return null;
+      const failed = {
+        success: false, distanceKm: 0, etaMinutes: 0, coordinates: [], blockedRoads: [],
+        reason: 'The route service could not be reached. Check your connection and try again.',
+      };
+      setRoute(failed); // show an error, never a blank screen
+      return failed;
     } finally {
       setIsRouting(false);
     }
@@ -97,7 +122,7 @@ export function ResponseProvider({ children }) {
   // Request help & match with real volunteer responder
   const requestResource = useCallback(async (name = resource, priority = 'HIGH') => {
     if (!userLocation) {
-      return { matched: false, message: 'Device location required for emergency request.' };
+      return { matched: false, failed: true, message: 'Your location is required to request help. Turn on location and try again.' };
     }
 
     try {
@@ -106,27 +131,29 @@ export function ResponseProvider({ children }) {
         priority,
         latitude: userLocation.latitude,
         longitude: userLocation.longitude,
+        userId: user ? user.id : undefined,
       });
 
       if (result && result.match && result.match.matched && result.match.volunteer) {
-        const vol = result.match.volunteer;
+        const vol = { ...result.match.volunteer, resource: cleanResource(result.match.volunteer) };
         setDestinationVolunteer(vol);
         setDestinationLabel(`${vol.name} (${vol.resource || vol.skill})`);
-        setMatch(result.match);
+        const cleaned = { ...result.match, volunteer: vol, requestId: result.requestId };
+        setMatch(cleaned);
 
         // Immediately compute live route to matched volunteer
         await requestRoute({ latitude: vol.latitude, longitude: vol.longitude });
-        return result.match;
+        return cleaned;
       } else {
         setMatch(result.match || { matched: false, message: 'No nearby matching responder found.' });
         return result.match;
       }
     } catch (err) {
-      const fallbackFail = { matched: false, message: 'Emergency dispatch request timed out.' };
+      const fallbackFail = { matched: false, failed: true, message: 'Could not reach the server to send your request. Check your connection and try again.' };
       setMatch(fallbackFail);
       return fallbackFail;
     }
-  }, [userLocation, resource, requestRoute]);
+  }, [userLocation, resource, requestRoute, user]);
 
   const reset = useCallback(() => {
     setRoute(null);
@@ -146,7 +173,7 @@ export function ResponseProvider({ children }) {
     return (liveVolunteers || []).map((v) => ({
       id: String(v.id),
       name: v.name,
-      resource: v.resources || v.skill || 'Assistance',
+      resource: cleanResource(v),
       latitude: v.latitude,
       longitude: v.longitude,
       availability: v.available ? 'AVAILABLE' : 'UNAVAILABLE',

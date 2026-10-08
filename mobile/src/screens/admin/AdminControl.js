@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Image, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { symbols } from '../../assets';
 import Header from '../../components/Header';
 import ActionButton from '../../components/ActionButton';
@@ -45,6 +45,7 @@ export default function AdminControl() {
   return (
     <View style={{ flex: 1 }}>
       <Header title="Control" subtitle="Hazard simulation, roads and demo reset" />
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
         <ErrorText>{error || roads.error}</ErrorText>
 
@@ -98,6 +99,7 @@ export default function AdminControl() {
           </View>
         </Card>
       </ScrollView>
+      </KeyboardAvoidingView>
     </View>
   );
 }

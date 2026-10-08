@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { POLL_MS, USE_DEVICE_LOCATION } from '../config/api';
-import { syncTelemetry } from '../services/api';
+import { getRoadStatus, getZoneAlerts, syncTelemetry } from '../services/api';
 import {
   checkLocationPermission,
   requestLocationPermission,
@@ -23,6 +23,8 @@ export function DataProvider({ children }) {
   const [weather, setWeather] = useState(null);
   const [incidents, setIncidents] = useState([]);
   const [volunteers, setVolunteers] = useState([]);
+  const [zoneAlerts, setZoneAlerts] = useState([]); // admin/engine alerts from GET /alerts
+  const [roadStatus, setRoadStatus] = useState([]); // admin-managed road state from GET /roads
   const [source, setSource] = useState('live');
   const [lastUpdated, setLastUpdated] = useState(null);
   const [backendError, setBackendError] = useState(null);
@@ -85,7 +87,13 @@ export function DataProvider({ children }) {
     busyRef.current = true;
 
     try {
-      const bundle = await syncTelemetry(userLocation.latitude, userLocation.longitude);
+      const [bundle, alertsRes, roadsRes] = await Promise.all([
+        syncTelemetry(userLocation.latitude, userLocation.longitude),
+        getZoneAlerts().catch(() => null), // a failure here must not hide the rest of the telemetry
+        getRoadStatus().catch(() => null),
+      ]);
+      if (alertsRes) setZoneAlerts(alertsRes);
+      if (roadsRes) setRoadStatus(roadsRes);
       const rawRisk = bundle.risk;
       const normalizedRisk = rawRisk ? {
         ...rawRisk,
@@ -140,42 +148,87 @@ export function DataProvider({ children }) {
     }
   }, []);
 
-  // Filter blocked roads from active incidents
-  const blocked = useMemo(() => {
-    return incidents.filter(
-      (inc) => (inc.type === 'BLOCKED_ROAD' || inc.type === 'FLOODED_ROAD') && inc.status !== 'RESOLVED'
-    ).map((inc) => ({
-      id: inc.id,
-      name: inc.description || `${inc.type.replace('_', ' ')} #${inc.id}`,
-      latitude: inc.latitude,
-      longitude: inc.longitude,
-      status: 'BLOCKED',
-    }));
-  }, [incidents]);
+  const SEVERITY_RANK = { LOW: 1, MEDIUM: 2, MODERATE: 2, HIGH: 3, CRITICAL: 4 };
+  const rank = (lvl) => SEVERITY_RANK[lvl] || 0;
 
-  // Map active incidents to alerts
+  // Blocked roads: reported incidents plus roads an admin has closed (shown as full road lines on the map).
+  const blocked = useMemo(() => {
+    const fromIncidents = incidents
+      .filter((inc) => (inc.type === 'BLOCKED_ROAD' || inc.type === 'FLOODED_ROAD') && inc.status !== 'RESOLVED')
+      .map((inc) => ({
+        id: `incident-${inc.id}`, // own namespace: an incident id must never equal a road id
+        name: inc.description || `${inc.type.replace('_', ' ')} #${inc.id}`,
+        latitude: inc.latitude,
+        longitude: inc.longitude,
+        status: 'BLOCKED',
+      }));
+    const fromAdmin = roadStatus
+      .filter((r) => r.status === 'BLOCKED')
+      .map((r) => ({ id: `road-${r.id}`, name: r.name, coordinates: r.coordinates, status: 'BLOCKED', closedByAdmin: true }));
+    return [...fromAdmin, ...fromIncidents];
+  }, [incidents, roadStatus]);
+
+  // Alerts: zone alerts from the backend (with reason and affected road) plus incident-based notices.
   const alerts = useMemo(() => {
-    return incidents
+    const fromBackend = zoneAlerts.map((a) => ({
+      id: `zone-${a.id}`,
+      severity: a.severity,
+      message: a.message,
+      reason: a.reason,
+      affected_zone: a.affected_zone,
+      affected_road: a.affected_road,
+      risk_score: a.risk_score,
+      created_at: a.updated_at || a.created_at,
+      drill: /^SIMULATED DRILL/i.test(a.message || ''),
+    }));
+    const fromIncidents = incidents
       .filter((inc) => inc.status !== 'RESOLVED' && (inc.severity >= 3 || inc.type === 'FLOODED_ROAD' || inc.type === 'BLOCKED_ROAD'))
       .map((inc) => ({
-        id: inc.id,
+        id: `inc-${inc.id}`,
         severity: inc.severity >= 4 ? 'HIGH' : inc.severity === 3 ? 'MODERATE' : 'LOW',
-        message: inc.description || `${inc.type.replace('_', ' ')} verified in monitored sector`,
+        message: inc.description || `${inc.type.replace('_', ' ')} reported in monitored sector`,
         affected_zone: locationLabel,
         created_at: inc.timestamp || inc.created_at,
       }));
-  }, [incidents, locationLabel]);
+    return [...fromBackend, ...fromIncidents].sort(
+      (a, b) =>
+        rank(b.severity) - rank(a.severity) ||
+        String(a.affected_zone || '').localeCompare(String(b.affected_zone || '')) || // steady order between equal alerts
+        String(b.created_at).localeCompare(String(a.created_at))
+    );
+  }, [zoneAlerts, incidents, locationLabel]);
+
+  // Effective risk: the position-based reading, raised to the strongest active zone alert if that is higher.
+  const effectiveRisk = useMemo(() => {
+    if (!risk) return risk;
+    const top = zoneAlerts.reduce((best, a) => (rank(a.severity) > rank(best?.severity) ? a : best), null);
+    if (top && rank(top.severity) > rank(risk.level)) {
+      return {
+        ...risk,
+        level: top.severity,
+        risk_level: top.severity,
+        score: Math.max(risk.score || 0, top.risk_score || 0),
+        risk_score: Math.max(risk.score || 0, top.risk_score || 0),
+        reason: top.reason || top.message,
+        zoneAlert: true,
+        drill: /^SIMULATED DRILL/i.test(top.message || ''),
+      };
+    }
+    return risk;
+  }, [risk, zoneAlerts]);
 
   const value = {
     loading,
     userLocation,
     locationLabel,
     locationStatus,
-    risk,
+    risk: effectiveRisk,
+    gpsRisk: risk,
     weather,
     incidents,
     volunteers,
     blocked,
+    roads: roadStatus,
     alerts,
     source,
     lastUpdated,

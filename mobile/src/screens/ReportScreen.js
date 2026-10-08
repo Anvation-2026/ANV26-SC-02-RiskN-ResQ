@@ -93,7 +93,7 @@ export default function ReportScreen({ navigate }) {
       await refresh();
       setDone(true);
     } catch (e) {
-      setErrorMsg('Failed to transmit report. Please check connection.');
+      setErrorMsg(e && e.status ? (e.detail || 'The server rejected the report.') : 'Could not reach the server. Your report was not sent. Check your connection and try again.');
     } finally {
       setBusy(false);
     }
