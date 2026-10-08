@@ -1,5 +1,5 @@
 // Auth gate. The role shown here always comes from the backend (login / GET /auth/me), never from the client.
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 import { DataProvider } from '../context/DataContext';
@@ -14,6 +14,7 @@ import VolunteerDashboard from '../screens/volunteer/VolunteerDashboard';
 export default function RootNavigator() {
   const { status, user } = useAuth();
   const [mode, setMode] = useState('login');
+  useEffect(() => { if (status === 'in') setMode('login'); }, [status]); // after logout, always land on Login
 
   if (status === 'loading') {
     return <View style={{ flex: 1, backgroundColor: colors.navy, alignItems: 'center', justifyContent: 'center' }}><ActivityIndicator color="#fff" /></View>;

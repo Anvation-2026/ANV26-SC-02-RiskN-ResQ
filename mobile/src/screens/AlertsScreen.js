@@ -1,7 +1,8 @@
 import React from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Feather from '@expo/vector-icons/Feather';
+import { Image } from 'react-native';
+import { symbols } from '../assets';
 import Header from '../components/Header';
 import AlertCard from '../components/AlertCard';
 import ConnectionBanner from '../components/ConnectionBanner';
@@ -37,12 +38,10 @@ export default function AlertsScreen({ navigate }) {
           ))
         ) : (
           <View style={styles.empty}>
-            <View style={styles.emptyIconBg}>
-              <Feather name="shield" size={32} color={colors.LOW} />
-            </View>
+            <Image source={symbols.bell} style={styles.emptySymbol} />
             <Text style={styles.eTitle}>No Active Alerts</Text>
             <Text style={styles.muted}>
-              Your sector is currently clear. You will receive an immediate push alert if local flood risk escalates.
+              No active alerts for your area right now. New alerts appear here automatically when flood risk rises.
             </Text>
           </View>
         )}
@@ -52,6 +51,7 @@ export default function AlertsScreen({ navigate }) {
 }
 
 const styles = StyleSheet.create({
+  emptySymbol: { width: 64, height: 64, borderRadius: 16, marginBottom: 10 },
   root: {
     flex: 1,
     backgroundColor: colors.bg,

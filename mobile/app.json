@@ -7,11 +7,19 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "in.resq.riskn",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "RiskN ResQ uses your location to show flood risk and blocked roads near you.",
+        "NSCameraUsageDescription": "RiskN ResQ uses the camera so you can attach a photo to an incident report.",
+        "NSPhotoLibraryUsageDescription": "RiskN ResQ lets you attach a photo from your library to an incident report."
+      }
     },
     "android": {
+      "package": "in.resq.riskn",
+      "permissions": ["ACCESS_COARSE_LOCATION", "ACCESS_FINE_LOCATION", "CAMERA"],
       "adaptiveIcon": {
-        "backgroundColor": "#0B1F3A",
+        "backgroundColor": "#0B1F33",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
@@ -24,7 +32,22 @@
     },
     "plugins": [
       "expo-font",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-location",
+        { "locationWhenInUsePermission": "RiskN ResQ uses your location to show flood risk and blocked roads near you." }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "RiskN ResQ lets you attach a photo from your library to an incident report.",
+          "cameraPermission": "RiskN ResQ uses the camera so you can attach a photo to an incident report."
+        }
+      ],
+      [
+        "expo-splash-screen",
+        { "image": "./assets/splash-icon.png", "imageWidth": 200, "backgroundColor": "#0B1F33" }
+      ]
     ]
   }
 }

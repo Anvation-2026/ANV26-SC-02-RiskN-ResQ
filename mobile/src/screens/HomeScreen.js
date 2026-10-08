@@ -5,6 +5,8 @@ import Feather from '@expo/vector-icons/Feather';
 import Header from '../components/Header';
 import RiskCard from '../components/RiskCard';
 import ActionButton from '../components/ActionButton';
+import { symbols } from '../assets';
+import { dataLabel } from '../services/dataLabel';
 import ConnectionBanner from '../components/ConnectionBanner';
 import { useData } from '../context/DataContext';
 import { colors, radius, riskColor, shadow } from '../theme';
@@ -13,7 +15,7 @@ import { USER } from '../services/geo';
 const TEXT = {
   LOW: ['LOW FLOOD RISK', 'Conditions are normal. No active flood risk reported.'],
   MEDIUM: ['MODERATE FLOOD RISK', 'Moderate rainfall detected. Monitor local alerts.'],
-  HIGH: ['HIGH FLOOD RISK', 'Elevated runoff and waterlogging reported along corridors.'],
+  HIGH: ['HIGH FLOOD RISK', 'Heavy rainfall indicates elevated flood risk in your area.'],
   CRITICAL: ['CRITICAL FLOOD RISK', 'Heavy rainfall and multiple incident reports indicate severe flood risk.'],
 };
 
@@ -28,6 +30,7 @@ export default function HomeScreen({ navigate }) {
   const insets = useSafeAreaInsets();
   const { risk, blocked, source } = useData();
   const [title, body] = risk ? TEXT[risk.level] || TEXT.LOW : ['', ''];
+  const label = dataLabel(source, risk);
 
   return (
     <View style={styles.container}>
@@ -35,8 +38,8 @@ export default function HomeScreen({ navigate }) {
         title="RiskNResQ"
         subtitle="Disaster Early Warning Network"
         right={
-          <View style={[styles.pill, { backgroundColor: source === 'live' ? '#16A34A' : '#F59E0B' }]}>
-            <Text style={styles.pillText}>{source === 'live' ? '● LIVE' : '● DEMO'}</Text>
+          <View style={[styles.pill, { backgroundColor: label.color }]}>
+            <Text style={styles.pillText}>{label.text}</Text>
           </View>
         }
       >
@@ -53,6 +56,7 @@ export default function HomeScreen({ navigate }) {
       >
         <ConnectionBanner />
         <RiskCard risk={risk} />
+        <Text style={styles.disclaimer}>{label.note}</Text>
 
         {risk && (
           <View style={[styles.status, { borderLeftColor: riskColor(risk.level) }]}>
@@ -72,24 +76,28 @@ export default function HomeScreen({ navigate }) {
         <View style={styles.grid}>
           <ActionButton
             iconName="map"
+            image={symbols.map}
             label="Live Map"
             color={colors.primary}
             onPress={() => navigate('Map')}
           />
           <ActionButton
             iconName="navigation"
+            image={symbols.route}
             label="Alternative Route"
             color="#0284C7"
             onPress={() => navigate('Map')}
           />
           <ActionButton
             iconName="alert-triangle"
+            image={symbols.report}
             label="Report Incident"
             color="#D97706"
             onPress={() => navigate('Report')}
           />
           <ActionButton
             iconName="life-buoy"
+            image={symbols.help}
             label="Request Help"
             color="#DC2626"
             onPress={() => navigate('Help')}
@@ -112,6 +120,7 @@ export default function HomeScreen({ navigate }) {
 }
 
 const styles = StyleSheet.create({
+  disclaimer: { fontFamily: 'PlusJakartaSans_500Medium', fontSize: 12, color: colors.muted, marginTop: -4, marginBottom: 2, textAlign: 'center' },
   container: {
     flex: 1,
     backgroundColor: colors.bg,

@@ -30,10 +30,10 @@ export default function RiskCard({ risk }) {
         <Text style={styles.level} numberOfLines={1}>{risk.level}</Text>
         <Text style={styles.subtext}>
           {risk.level === 'CRITICAL' || risk.level === 'HIGH'
-            ? 'Severe flooding & road blockages reported'
+            ? 'Elevated flood risk in your area'
             : risk.level === 'MEDIUM' || risk.level === 'MODERATE'
-            ? 'Waterlogging monitored along corridors'
-            : 'Normal transit & drainage conditions'}
+            ? 'Waterlogging risk is rising'
+            : 'Conditions look normal'}
         </Text>
       </View>
 

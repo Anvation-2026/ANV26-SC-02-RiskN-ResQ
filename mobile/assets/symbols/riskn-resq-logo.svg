@@ -1,0 +1,18 @@
+<svg viewBox="0 0 150 150" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#16396B"/><stop offset="1" stop-color="#0B1F33"/></linearGradient>
+    <linearGradient id="drop" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7DB4FF"/><stop offset="1" stop-color="#1565FF"/></linearGradient>
+  </defs>
+  <rect width="150" height="150" rx="34" fill="url(#bg)"/>
+  <!-- early-warning radar ring -->
+  <circle cx="75" cy="75" r="65" fill="none" stroke="#3F7BFF" stroke-opacity=".55" stroke-width="3" stroke-dasharray="2 9" stroke-linecap="round"/>
+  <!-- rescue lifebuoy -->
+  <circle cx="75" cy="75" r="40" fill="none" stroke="#fff" stroke-width="15"/>
+  <circle cx="75" cy="75" r="40" fill="none" stroke="#DC2626" stroke-width="15" stroke-dasharray="30 32.8" stroke-dashoffset="-47.8"/>
+  <!-- flood water drop -->
+  <path d="M75 52 C75 52 59 72 59 84 A16 16 0 0 0 91 84 C91 72 75 52 75 52Z" fill="url(#drop)"/>
+  <ellipse cx="69" cy="82" rx="3" ry="6" fill="#fff" fill-opacity=".55" transform="rotate(18 69 82)"/>
+  <!-- risk alert -->
+  <circle cx="115" cy="35" r="16" fill="#DC2626" stroke="#0B1F33" stroke-width="4"/>
+  <rect x="112" y="25" width="6" height="13" rx="3" fill="#fff"/><circle cx="115" cy="44" r="3.4" fill="#fff"/>
+</svg>

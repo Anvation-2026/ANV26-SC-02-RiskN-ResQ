@@ -4,6 +4,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ActionButton from '../../components/ActionButton';
 import { ErrorText, Field } from '../../components/ui';
 import { errorText, useAuth } from '../../context/AuthContext';
+import { Image } from 'react-native';
+import { symbols } from '../../assets';
 import { colors, fonts } from '../../theme';
 
 export default function RegisterScreen({ goLogin }) {
@@ -32,6 +34,7 @@ export default function RegisterScreen({ goLogin }) {
   return (
     <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.navy }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 36 }]} keyboardShouldPersistTaps="handled">
+        <Image source={symbols.logo} style={styles.logo} />
         <Text style={styles.brand}>RiskN ResQ</Text>
         <View style={styles.card}>
           <Text style={styles.title}>Create Account</Text>
@@ -54,6 +57,7 @@ export default function RegisterScreen({ goLogin }) {
 }
 
 const styles = StyleSheet.create({
+  logo: { width: 72, height: 72, borderRadius: 18, marginBottom: 14 },
   scroll: { paddingHorizontal: 20, paddingBottom: 40 },
   brand: { fontFamily: fonts.extrabold, fontSize: 28, color: '#fff', letterSpacing: -0.5, marginBottom: 18 },
   card: { backgroundColor: colors.bg, borderRadius: 22, padding: 22 },

@@ -133,7 +133,7 @@ export default function MapView({
                   <Text style={{ fontSize: m.highlight ? 15 : 12 }}>{m.emoji}</Text>
                 </View>
               </Marker>
-              {m.label ? (
+              {m.label && (m.highlight || /relief/i.test(m.label)) ? (
                 <View pointerEvents="none" style={[styles.tag, { left: p.x + 14, top: p.y - 8, borderColor: m.color || colors.LOW }]}>
                   <Text style={[styles.tagText, { color: m.color || colors.LOW }]}>{m.label}</Text>
                 </View>

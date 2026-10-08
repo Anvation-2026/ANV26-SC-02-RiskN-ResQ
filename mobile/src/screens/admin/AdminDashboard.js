@@ -2,14 +2,17 @@ import React from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import Header from '../../components/Header';
 import ActionButton from '../../components/ActionButton';
+import { Image } from 'react-native';
+import { symbols } from '../../assets';
 import { Card, ErrorText, Label, SmallButton } from '../../components/ui';
 import { useAuth } from '../../context/AuthContext';
 import usePolling from '../../hooks/usePolling';
 import { getAdminSummary } from '../../services/accountApi';
 import { colors, fonts, riskColor } from '../../theme';
 
-const Stat = ({ label, value, color }) => (
+const Stat = ({ label, value, color, image }) => (
   <View style={styles.stat}>
+    {image ? <Image source={image} style={styles.statImg} /> : null}
     <Label>{label}</Label>
     <Text style={[styles.value, color && { color }]}>{value}</Text>
   </View>
@@ -26,10 +29,10 @@ export default function AdminDashboard({ navigate }) {
         {s ? (
           <>
             <View style={styles.grid}>
-              <Stat label="ACTIVE RISK" value={`${s.risk.risk_level} · ${s.risk.risk_score}`} color={riskColor(s.risk.risk_level)} />
-              <Stat label="ACTIVE ALERTS" value={s.active_alerts} />
+              <Stat image={symbols.risk} label="ACTIVE RISK" value={`${s.risk.risk_level} · ${s.risk.risk_score}`} color={riskColor(s.risk.risk_level)} />
+              <Stat image={symbols.bell} label="ACTIVE ALERTS" value={s.active_alerts} />
               <Stat label="OPEN INCIDENTS" value={s.open_incidents} />
-              <Stat label="BLOCKED ROADS" value={s.blocked_roads} color={s.blocked_roads ? colors.HIGH : undefined} />
+              <Stat image={symbols.roadBlocked} label="BLOCKED ROADS" value={s.blocked_roads} color={s.blocked_roads ? colors.HIGH : undefined} />
               <Stat label="PENDING HELP REQUESTS" value={s.pending_help_requests} />
               <Stat label="AVAILABLE VOLUNTEERS" value={s.available_volunteers} />
             </View>
@@ -51,6 +54,7 @@ export default function AdminDashboard({ navigate }) {
 }
 
 const styles = StyleSheet.create({
+  statImg: { width: 30, height: 30, borderRadius: 8, marginBottom: 8 },
   body: { padding: 16, paddingBottom: 40 },
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   stat: { flexBasis: '47%', flexGrow: 1, backgroundColor: '#fff', borderRadius: 16, padding: 14 },

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import { colors, radius, shadow } from '../theme';
 
@@ -7,6 +7,7 @@ import { colors, radius, shadow } from '../theme';
 export default function ActionButton({
   icon,
   iconName,
+  image,
   label,
   onPress,
   variant = 'tile',
@@ -36,8 +37,10 @@ export default function ActionButton({
         pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] },
       ]}
     >
-      <View style={[styles.iconWrapper, { backgroundColor: color + '15' }]}>
-        {iconName ? (
+      <View style={[styles.iconWrapper, image ? styles.imageWrapper : { backgroundColor: color + '15' }]}>
+        {image ? (
+          <Image source={image} style={styles.symbol} />
+        ) : iconName ? (
           <Feather name={iconName} size={20} color={color} />
         ) : (
           <Text style={styles.fallbackIcon}>{icon}</Text>
@@ -71,6 +74,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: 8,
   },
+  imageWrapper: { width: 46, height: 46, borderRadius: 14, overflow: 'hidden' },
+  symbol: { width: 46, height: 46 },
   fallbackIcon: {
     fontSize: 20,
   },

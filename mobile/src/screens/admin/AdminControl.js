@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { symbols } from '../../assets';
 import Header from '../../components/Header';
 import ActionButton from '../../components/ActionButton';
 import { Card, ErrorText, Field, Label, Pill, SmallButton, statusColor } from '../../components/ui';
@@ -48,7 +49,7 @@ export default function AdminControl() {
         <ErrorText>{error || roads.error}</ErrorText>
 
         <Card>
-          <Text style={styles.title}>Simulate hazard (flood)</Text>
+          <View style={styles.titleRow}><Image source={symbols.rain} style={styles.sym} /><Text style={styles.title}>Simulate hazard (flood)</Text></View>
           <Text style={styles.line}>Sets rainfall for all zones. Simulated demo data, not a live reading.</Text>
           <View style={styles.row}>
             {PRESETS.map(([l, mm, c]) => <View key={l} style={{ flex: 1 }}><SmallButton label={`${l} ${mm}mm`} color={c} disabled={busy} onPress={() => { setRain(String(mm)); simulate(mm); }} /></View>)}
@@ -65,7 +66,7 @@ export default function AdminControl() {
         </Card>
 
         <Card>
-          <Text style={styles.title}>Active alerts</Text>
+          <View style={styles.titleRow}><Image source={symbols.bell} style={styles.sym} /><Text style={styles.title}>Active alerts</Text></View>
           {(alerts.data || []).length === 0 ? <Text style={styles.line}>No active alerts.</Text> : alerts.data.map((a) => (
             <View key={a.id} style={{ marginTop: 8 }}>
               <Pill text={`${a.severity} · ${a.affected_zone}`} color={riskColor(a.severity)} />
@@ -75,7 +76,7 @@ export default function AdminControl() {
         </Card>
 
         <Card>
-          <Text style={styles.title}>Roads</Text>
+          <View style={styles.titleRow}><Image source={symbols.roadBlocked} style={styles.sym} /><Text style={styles.title}>Roads</Text></View>
           {(roads.data || []).map((r) => (
             <View key={r.id} style={styles.roadRow}>
               <View style={{ flex: 1 }}>
@@ -102,6 +103,8 @@ export default function AdminControl() {
 }
 
 const styles = StyleSheet.create({
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  sym: { width: 30, height: 30, borderRadius: 8 },
   body: { padding: 16, paddingBottom: 40 },
   row: { flexDirection: 'row', gap: 8, marginTop: 12 },
   title: { fontFamily: fonts.bold, fontSize: 16, color: colors.text },

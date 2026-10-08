@@ -1,6 +1,8 @@
 // Auth, admin and volunteer API calls. These talk to the live backend only (no demo fallback):
 // signing in, managing volunteers or changing roads must never be faked.
 import { http } from './api';
+import { API_BASE_URL } from '../config/api';
+import { getToken } from './session';
 
 // ── auth ──
 export const apiLogin = (email, password) => http('/auth/login', { method: 'POST', body: { email, password } });
@@ -32,3 +34,16 @@ export const resetDemo = () => http('/reset', { method: 'POST' });
 export const getActiveAlerts = () => http('/alerts?active_only=true');
 export const getHelpRequests = () => http('/help-requests');
 export const getMatches = () => http('/matches');
+
+// Admin/reporter photo: fetched with the login token, returned as a data URI an <Image> can show.
+export async function fetchIncidentPhoto(id) {
+  const res = await fetch(`${API_BASE_URL}/incidents/${id}/photo`, { headers: { Authorization: `Bearer ${getToken()}` } });
+  if (!res.ok) throw Object.assign(new Error('Photo unavailable'), { status: res.status, detail: 'Photo unavailable' });
+  const blob = await res.blob();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}

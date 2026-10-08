@@ -54,7 +54,7 @@ async function withFallback(live, fallback) {
 export async function getRisk() {
   const raw = await withFallback(() => http('/risk'), mock.mockRisk);
   const o = raw.overall || raw;
-  return { score: o.risk_score, level: o.risk_level, zone: o.location, reason: o.reason, rainfall: o.rainfall, zones: raw.zones || [o] };
+  return { score: o.risk_score, level: o.risk_level, zone: o.location, reason: o.reason, rainfall: o.rainfall, dataSource: o.data_source || 'DEMO_SEED', zones: raw.zones || [o] };
 }
 
 export async function getAlerts() {
@@ -126,4 +126,31 @@ export async function syncRoadA(blocked) {
     const roads = await http('/roads');
     if (roads.length) await http(`/roads/${roads[0].id}/${blocked ? 'block' : 'unblock'}`, { method: 'POST' });
   } catch (e) { /* backend optional */ }
+}
+
+// Uploads the chosen image to the backend as raw bytes. Resolves only when the server confirmed it stored the photo.
+export async function uploadIncidentPhoto(incidentId, uri) {
+  const blob = await (await fetch(uri)).blob();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30000);
+  try {
+    const res = await fetch(`${API_BASE_URL}/incidents/${incidentId}/photo`, {
+      method: 'POST',
+      headers: { 'Content-Type': blob.type || 'application/octet-stream', Authorization: `Bearer ${getToken()}` },
+      body: blob,
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      let detail = null;
+      try { const b = await res.json(); detail = typeof b.detail === 'string' ? b.detail : null; } catch (e) { /* not JSON */ }
+      const err = new Error(detail || `Upload failed (${res.status})`);
+      err.status = res.status;
+      err.detail = detail;
+      if (res.status === 401) notifyUnauthorized();
+      throw err;
+    }
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
 }

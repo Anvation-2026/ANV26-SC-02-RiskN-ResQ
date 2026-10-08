@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import {
+  Image,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -14,7 +15,8 @@ import Feather from '@expo/vector-icons/Feather';
 import Header from '../components/Header';
 import ActionButton from '../components/ActionButton';
 import { useData } from '../context/DataContext';
-import { submitIncident } from '../services/api';
+import * as ImagePicker from 'expo-image-picker';
+import { getSource, submitIncident, uploadIncidentPhoto } from '../services/api';
 import { errorText } from '../context/AuthContext';
 import { ErrorText } from '../components/ui';
 import { colors, radius, shadow } from '../theme';
@@ -41,17 +43,48 @@ export default function ReportScreen({ navigate }) {
   const { refresh } = useData();
   const [type, setType] = useState('FLOOD');
   const [text, setText] = useState('');
-  const [located, setLocated] = useState(false);
-  const [photo, setPhoto] = useState(false);
+  const [photo, setPhoto] = useState(null); // {uri, ...} from the picker
+  const [photoResult, setPhotoResult] = useState(null); // {status: 'uploaded'|'failed'|'offline', message?}
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState('');
+
+  const pickPhoto = async (useCamera) => {
+    setError('');
+    try {
+      const perm = useCamera ? await ImagePicker.requestCameraPermissionsAsync() : await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        setError(useCamera ? 'Camera permission was denied.' : 'Photo library permission was denied.');
+        return;
+      }
+      const res = useCamera
+        ? await ImagePicker.launchCameraAsync({ quality: 0.5 })
+        : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.5 });
+      if (!res.canceled && res.assets && res.assets[0]) setPhoto(res.assets[0]);
+    } catch (e) {
+      setError('Could not open the photo picker on this device.');
+    }
+  };
 
   const submit = async () => {
     setBusy(true);
     setError('');
     try {
-      await submitIncident({ type, description: text.trim() || 'Reported via mobile app' });
+      const incident = await submitIncident({ type, description: text.trim() || 'Reported via mobile app' });
+      let result = null;
+      if (photo) {
+        if (getSource() === 'live' && incident && incident.id) {
+          try {
+            await uploadIncidentPhoto(incident.id, photo.uri);
+            result = { status: 'uploaded' };
+          } catch (e) {
+            result = { status: 'failed', message: errorText(e) };
+          }
+        } else {
+          result = { status: 'offline' };
+        }
+      }
+      setPhotoResult(result);
       await refresh();
       setDone(true);
     } catch (e) {
@@ -63,8 +96,8 @@ export default function ReportScreen({ navigate }) {
   const reset = () => {
     setDone(false);
     setText('');
-    setPhoto(false);
-    setLocated(false);
+    setPhoto(null);
+    setPhotoResult(null);
     setType('FLOOD');
   };
 
@@ -93,8 +126,11 @@ export default function ReportScreen({ navigate }) {
               </View>
               <Text style={styles.sTitle}>Incident Logged</Text>
               <Text style={styles.sBody}>
-                Your report has been broadcast to civic monitors and will factor into real-time routing adjustments.
+                Your report was saved and will be considered in the local risk assessment.
               </Text>
+              {photoResult && photoResult.status === 'uploaded' ? <Text style={styles.photoOk}>Photo uploaded with your report.</Text> : null}
+              {photoResult && photoResult.status === 'failed' ? <Text style={styles.photoBad}>Your report was saved, but the photo could not be uploaded: {photoResult.message}</Text> : null}
+              {photoResult && photoResult.status === 'offline' ? <Text style={styles.photoBad}>The server was unreachable, so this report was saved in demo mode only. Your photo was not uploaded.</Text> : null}
               <View style={{ alignSelf: 'stretch', gap: 10, marginTop: 16 }}>
                 <ActionButton
                   variant="primary"
@@ -134,22 +170,13 @@ export default function ReportScreen({ navigate }) {
                 })}
               </View>
 
-              <Text style={styles.label}>GEO-COORDINATES</Text>
-              <Pressable
-                onPress={() => setLocated(true)}
-                style={[styles.field, located && styles.fieldOk]}
-              >
-                <Feather
-                  name="crosshair"
-                  size={16}
-                  color={located ? colors.LOW : colors.muted}
-                />
+              <Text style={styles.label}>REPORT LOCATION</Text>
+              <View style={styles.field}>
+                <Feather name="crosshair" size={16} color={colors.muted} />
                 <Text style={styles.fieldText}>
-                  {located
-                    ? `Locked: ${USER.latitude.toFixed(4)}, ${USER.longitude.toFixed(4)} (${USER.label})`
-                    : `Tap to attach current GPS (${USER.label})`}
+                  Demo location: {USER.label} ({USER.latitude.toFixed(4)}, {USER.longitude.toFixed(4)})
                 </Text>
-              </Pressable>
+              </View>
 
               <Text style={styles.label}>FIELD OBSERVATION</Text>
               <TextInput
@@ -162,19 +189,29 @@ export default function ReportScreen({ navigate }) {
                 numberOfLines={3}
               />
 
-              <Pressable
-                onPress={() => setPhoto(!photo)}
-                style={[styles.field, photo && styles.fieldOk]}
-              >
-                <Feather
-                  name="camera"
-                  size={16}
-                  color={photo ? colors.LOW : colors.muted}
-                />
-                <Text style={styles.fieldText}>
-                  {photo ? 'Photo evidence attached (1 file)' : 'Attach geo-tagged photo (Optional)'}
-                </Text>
-              </Pressable>
+              <Text style={styles.label}>PHOTO (OPTIONAL)</Text>
+              {photo ? (
+                <View style={styles.photoBox}>
+                  <Image source={{ uri: photo.uri }} style={styles.photoPreview} resizeMode="cover" />
+                  <Pressable onPress={() => setPhoto(null)} style={styles.photoRemove} hitSlop={8}>
+                    <Feather name="x" size={14} color="#fff" />
+                    <Text style={styles.photoRemoveText}>Remove</Text>
+                  </Pressable>
+                </View>
+              ) : (
+                <View style={styles.photoRow}>
+                  <Pressable onPress={() => pickPhoto(false)} style={[styles.field, styles.photoBtn]}>
+                    <Feather name="image" size={16} color={colors.primary} />
+                    <Text style={styles.fieldText}>Choose photo</Text>
+                  </Pressable>
+                  {Platform.OS !== 'web' && (
+                    <Pressable onPress={() => pickPhoto(true)} style={[styles.field, styles.photoBtn]}>
+                      <Feather name="camera" size={16} color={colors.primary} />
+                      <Text style={styles.fieldText}>Take photo</Text>
+                    </Pressable>
+                  )}
+                </View>
+              )}
 
               <View style={{ marginTop: 14 }}>
                 <ErrorText>{error}</ErrorText>
@@ -195,6 +232,14 @@ export default function ReportScreen({ navigate }) {
 }
 
 const styles = StyleSheet.create({
+  photoRow: { flexDirection: 'row', gap: 10 },
+  photoBtn: { flex: 1, justifyContent: 'center' },
+  photoBox: { borderRadius: radius.card, overflow: 'hidden', backgroundColor: '#E2E8F0' },
+  photoPreview: { width: '100%', height: 180 },
+  photoRemove: { position: 'absolute', top: 10, right: 10, flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(15,23,42,0.8)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999 },
+  photoRemoveText: { color: '#fff', fontSize: 12, fontFamily: 'PlusJakartaSans_700Bold' },
+  photoOk: { fontFamily: 'PlusJakartaSans_700Bold', fontSize: 13, color: colors.LOW, marginTop: 10, textAlign: 'center' },
+  photoBad: { fontFamily: 'PlusJakartaSans_600SemiBold', fontSize: 13, color: '#B45309', marginTop: 10, textAlign: 'center', lineHeight: 19 },
   root: {
     flex: 1,
     backgroundColor: colors.bg,
