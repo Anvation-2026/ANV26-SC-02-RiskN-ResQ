@@ -6,6 +6,7 @@ import { DataProvider } from '../context/DataContext';
 import { ResponseProvider } from '../context/ResponseContext';
 import { colors, palette } from '../theme';
 import LaunchScreen from '../components/Launch';
+import SignInTransition from '../components/SignInTransition';
 import { FadeIn } from '../components/motion';
 import LoginScreen from '../screens/auth/LoginScreen';
 import RegisterScreen from '../screens/auth/RegisterScreen';
@@ -15,7 +16,7 @@ import AdminNavigator from './AdminNavigator';
 import VolunteerNavigator from './VolunteerNavigator';
 
 export default function RootNavigator() {
-  const { status, user } = useAuth();
+  const { status, user, entering, entered } = useAuth();
   const [mode, setMode] = useState('login');
   const [message, setMessage] = useState('');
   useEffect(() => { if (status === 'in') setMode('login'); }, [status]); // after logout, always land on Login
@@ -31,14 +32,16 @@ export default function RootNavigator() {
       ? wrap('login', <LoginScreen goRegister={() => setMode('register')} goForgot={() => { setMessage(''); setMode('forgot'); }} message={message} />, 'down')
       : wrap('register', <RegisterScreen goLogin={() => setMode('login')} />, 'left');
   }
-  if (user.role === 'volunteer') return <VolunteerNavigator />; // dedicated volunteer portal: no user or admin screens
-
   // user and admin both read risk/alerts/roads; the data providers poll only for signed-in sessions.
-  return (
-    <DataProvider>
-      <ResponseProvider>
-        {user.role === 'admin' ? <AdminNavigator /> : <AppNavigator />}
-      </ResponseProvider>
-    </DataProvider>
-  );
+  const portal = user.role === 'volunteer'
+    ? <VolunteerNavigator /> // dedicated volunteer portal: no user or admin screens
+    : (
+      <DataProvider>
+        <ResponseProvider>
+          {user.role === 'admin' ? <AdminNavigator /> : <AppNavigator />}
+        </ResponseProvider>
+      </DataProvider>
+    );
+  // a fresh sign-in plays the welcome transition once; a restored session opens straight away (after the launch screen)
+  return <SignInTransition key={user.id} user={user} play={!!entering} onDone={entered}>{portal}</SignInTransition>;
 }

@@ -1846,7 +1846,7 @@ def admin_summary(_: dict = Depends(auth.require_admin)):
     with db.session() as c:
         risks = [compute_risk(c, z) for z in db.ZONES]
         n = lambda q: c.execute(q).fetchone()[0]  # noqa: E731
-        roads_blocked = n("SELECT COUNT(*) FROM roads WHERE status='BLOCKED'") if db.table_exists(c, 'roads') else 0
+        roads_blocked = n(f"SELECT COUNT(*) FROM roads WHERE status='BLOCKED' AND {db.road_scope(c)}") if db.table_exists(c, 'roads') else 0
         return {
             "risk": max(risks, key=lambda r: r["risk_score"]),
             "active_alerts": n("SELECT COUNT(*) FROM alerts WHERE active=1"),
@@ -1910,7 +1910,7 @@ def reset(admin: dict = Depends(auth.require_admin)):
     with db.session() as c:
         risks = refresh_all(c)
         alerts = c.execute("SELECT COUNT(*) FROM alerts WHERE active=1").fetchone()[0]
-        blocked = c.execute("SELECT COUNT(*) FROM roads WHERE status='BLOCKED'").fetchone()[0] if db.table_exists(c, 'roads') else 0
+        blocked = c.execute(f"SELECT COUNT(*) FROM roads WHERE status='BLOCKED' AND {db.road_scope(c)}").fetchone()[0] if db.table_exists(c, 'roads') else 0
     return {
         "status": "reset",
         "risk_level": max(risks, key=lambda r: r["risk_score"])["risk_level"],
@@ -1987,10 +1987,10 @@ def simulate(body: SimIn, admin: dict = Depends(auth.require_admin)):
 
 @app.get("/roads")
 def list_roads(status: Optional[Literal["AVAILABLE", "BLOCKED"]] = None):
-    q, args = "SELECT * FROM roads", []
-    if status:
-        q += " WHERE status=?"; args.append(status)
     with db.session() as c:
+        q, args = f"SELECT * FROM roads WHERE {db.road_scope(c)}", []
+        if status:
+            q += " AND status=?"; args.append(status)
         risk = {x["id"]: x for x in road_risk.assess_roads(c)}
         out = []
         for r in c.execute(q + " ORDER BY id", args).fetchall():
@@ -2067,7 +2067,11 @@ def _intel_to_risk(a: dict, env) -> dict:
             "rainfall_intensity_mm_per_hour": w["rainfall_intensity_mm_per_hour"], "warning_level": "NONE", "reason": a["reason"], "observed_at": w["observed_at"],
             "probability": a["probability"], "probability_basis": a["probability_basis"], "signals": a["signals"], "missing": a["missing"], "sources": a["sources"],
             "explanation": a["explanation"], "model": a["model"], "recommended_action": a["recommended_action"], "insufficient": False, "mode": "LIVE",
-            "incident_count": a.get("report_counts", {}).get("total", 0), "verified_incidents": a.get("report_counts", {}).get("verified", 0)}
+            "incident_count": a.get("report_counts", {}).get("total", 0), "verified_incidents": a.get("report_counts", {}).get("verified", 0),
+            "confidence": a.get("confidence"), "confidence_basis": a.get("confidence_basis"), "computed_at": a.get("computed_at"),
+            "weather_stale": bool(a.get("weather_stale")), "features": a.get("features") or {},
+            "rain_1h_mm": w["rain_1h_mm"], "rain_3h_mm": w["rain_3h_mm"], "rain_6h_mm": w["rain_6h_mm"],
+            "forecast_3h_mm": w["forecast_3h_mm"], "forecast_6h_mm": w["forecast_6h_mm"]}
 
 
 @app.get("/sync")

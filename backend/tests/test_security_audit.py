@@ -15,6 +15,7 @@ from tests.test_auth import PW, anon, make_volunteer, user_client, volunteer_cli
 PUBLIC = {
     ("GET", "/health"), ("GET", "/health/providers"), ("GET", "/openapi.json"), ("GET", "/docs"), ("GET", "/redoc"), ("GET", "/docs/oauth2-redirect"),
     ("POST", "/auth/register"), ("POST", "/auth/login"), ("POST", "/auth/forgot-password"), ("POST", "/auth/reset-password"),
+    ("POST", "/auth/login-code/request"), ("POST", "/auth/login-code/verify"),
     ("GET", "/weather"), ("GET", "/weather/monitoring"), ("GET", "/risk"), ("GET", "/sync"),
     ("GET", "/flood-risk"), ("GET", "/flood-risk/cells"), ("GET", "/flood-risk/{zone}"), ("GET", "/intelligence/overview"),
     ("GET", "/satellite/observations"), ("GET", "/satellite/water-expansion"), ("GET", "/terrain"), ("GET", "/water-levels"),

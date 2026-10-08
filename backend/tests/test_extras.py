@@ -362,7 +362,11 @@ def test_reset_clears_demo_state_but_keeps_real_weather_cells_and_imported_roads
     assert client.post("/reset").status_code == 200
     assert len(anon().get("/weather/monitoring").json()["locations"]) == 25          # real observations are not demo state
     roads = {r["name"]: r for r in anon().get("/roads").json()}
-    assert roads["Real OSM Rd"]["status"] == "AVAILABLE" and {"Road A", "Road B", "Road C"} <= set(roads)   # re-opened, not deleted
+    assert roads["Real OSM Rd"]["status"] == "AVAILABLE"                              # re-opened, not deleted
+    # the synthetic seed roads are re-created by the reset but hidden once real (OSM) roads exist
+    assert not {"Road A", "Road B", "Road C"} & set(roads)
+    with db.session() as c:
+        assert {r["name"] for r in c.execute("SELECT name FROM roads WHERE source='SEED'")} == {"Road A", "Road B", "Road C"}
     assert [i for i in client.get("/incidents").json() if i["type"] == "FLOOD" and i["latitude"] == 12.95] == []
     z = anon().get("/flood-risk/Zone A").json()
     assert z["insufficient"] is False                                                # real cell data still feeds the zone after a reset
@@ -372,3 +376,50 @@ def test_reset_twice_does_not_collide_ids(client):
     assert client.post("/reset").status_code == 200
     assert client.post("/reset").status_code == 200
     assert [r["name"] for r in anon().get("/roads").json()][:3] == ["Road A", "Road B", "Road C"]
+
+
+def test_seed_roads_are_used_only_until_real_roads_are_imported(client):
+    assert {r["name"] for r in anon().get("/roads").json()} >= {"Road A", "Road B", "Road C"}   # empty install: reference geometry
+    with db.session() as c:
+        c.execute("INSERT INTO roads(name, coordinates, status, source) VALUES('Imported Rd', '[[12.97,77.59],[12.98,77.60]]', 'AVAILABLE', 'OSM')")
+    assert [r["name"] for r in anon().get("/roads").json()] == ["Imported Rd"]
+    assert [r["name"] for r in anon().get("/road-risk").json()["roads"]] == ["Imported Rd"]
+
+
+# ---------------------------------------------------------------- email sign-in code (users only)
+def test_user_signs_in_with_an_emailed_code(outbox):
+    register(anon(), "codeuser@test.local")
+    r = anon().post("/auth/login-code/request", json={"email": "CodeUser@test.local"})
+    assert r.status_code == 200 and r.json()["expires_in_minutes"] == 10
+    code = code_from(outbox, "codeuser@test.local", "sign-in code")
+    c = anon()
+    assert c.post("/auth/login-code/verify", json={"email": "codeuser@test.local", "code": "000000" if code != "000000" else "111111"}).status_code == 400
+    ok = c.post("/auth/login-code/verify", json={"email": "codeuser@test.local", "code": code})
+    assert ok.status_code == 200 and ok.json()["user"]["role"] == "user" and ok.json()["user"]["email_verified"] is True
+    c.headers["Authorization"] = f"Bearer {ok.json()['token']}"
+    assert c.get("/auth/me").json()["email"] == "codeuser@test.local"
+    assert anon().post("/auth/login-code/verify", json={"email": "codeuser@test.local", "code": code}).status_code == 400   # one use only
+
+
+def test_sign_in_codes_never_go_to_volunteers_admins_or_unknown_emails(client, outbox):
+    make_volunteer(client, email="vol-code@test.local")
+    answers = [anon().post("/auth/login-code/request", json={"email": e}).json() for e in ("vol-code@test.local", "admin@test.local", "nobody@test.local")]
+    assert answers[0] == answers[1] == answers[2]                                  # the same reply: nothing reveals who exists or their role
+    assert outbox.emails == []
+    for e in ("vol-code@test.local", "admin@test.local"):
+        assert anon().post("/auth/login-code/verify", json={"email": e, "code": "123456"}).status_code == 400
+
+
+def test_sign_in_code_resend_is_rate_limited_and_old_codes_stop_working(outbox, monkeypatch):
+    register(anon(), "resend@test.local")
+    anon().post("/auth/login-code/request", json={"email": "resend@test.local"})
+    anon().post("/auth/login-code/request", json={"email": "resend@test.local"})       # within the cooldown: no second email
+    assert len([e for e in outbox.emails if e["to"] == "resend@test.local" and "sign-in code" in e["subject"]]) == 1
+    first = code_from(outbox, "resend@test.local", "sign-in code")
+    import routes_account
+    monkeypatch.setattr(routes_account, "LOGIN_CODE_COOLDOWN_S", 0)
+    anon().post("/auth/login-code/request", json={"email": "resend@test.local"})
+    second = code_from(outbox, "resend@test.local", "sign-in code")
+    if first != second:
+        assert anon().post("/auth/login-code/verify", json={"email": "resend@test.local", "code": first}).status_code == 400
+    assert anon().post("/auth/login-code/verify", json={"email": "resend@test.local", "code": second}).status_code == 200

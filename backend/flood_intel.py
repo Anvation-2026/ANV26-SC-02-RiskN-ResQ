@@ -30,6 +30,7 @@ MODEL_NAME = "Prototype flood-risk model v2 (rule-based, additive; weights not s
 HOTSPOT_MIN_FAMILIES = 2
 REPORT_CAP = 15
 ACTIONS = {
+    "LOW": "No action needed now. Keep notifications on and check again if heavy rain starts.",
     "MEDIUM": "Stay alert and check the map before you travel.",
     "HIGH": "Avoid potentially affected roads and follow the recommended route.",
     "CRITICAL": "Move away from low-lying areas, follow official instructions and use designated evacuation points.",
@@ -290,11 +291,34 @@ def assess_cell(c, key: str, zone: Optional[str] = None, near: Optional[tuple] =
         names = [s["label"].lower() for s in sorted(contributing, key=lambda s: -s["points"])[:4] if s["key"] != "reports"]
         reason = "Flood risk is elevated because of " + (", ".join(names) if names else "community reports") + "."
     srcs = [{"name": k, "source": v[0], "observed_at": v[1]} for k, v in sources.items()]
-    return {**base, "signals": signals, "missing": missing, "risk_score": score, "risk_level": level, "probability": prob,
+    conf, conf_basis = data_confidence(signals, missing, w_stale, len(fam), level)
+    return {"confidence": conf, "confidence_basis": conf_basis, **base, "signals": signals, "missing": missing, "risk_score": score, "risk_level": level, "probability": prob,
             "probability_basis": basis, "reason": reason, "explanation": explanation, "sources": srcs, "evidence_families": len(fam),
             "families": sorted(fam), "satellite_abnormal": sat_abnormal, "satellite_confidence": sat["confidence"] if sat_abnormal else None, "satellite_age_days": sat_age_days,
             "features": features, "recommended_action": ACTIONS.get(level), "report_counts": rep,
             "weather_stale": w_stale, "rainfall": r24}
+
+
+CORE_FAMILIES = ("rainfall", "satellite", "terrain", "river", "history")
+
+
+def data_confidence(signals: list, missing: list, weather_stale: bool, agreeing: int, level: str) -> tuple:
+    """How complete and fresh the evidence behind an estimate is (HIGH / MEDIUM / LOW). It describes data coverage and
+    agreement between independent signals; it is not a calibrated statistical confidence."""
+    usable = {s["key"] for s in signals if s["key"] in CORE_FAMILIES and not s.get("stale")}
+    n = len(usable)
+    if not weather_stale and n >= 4 and (level == "LOW" or agreeing >= 2):
+        conf = "HIGH"
+    elif not weather_stale and n >= 3:
+        conf = "MEDIUM"
+    else:
+        conf = "LOW"
+    bits = [f"{n} of {len(CORE_FAMILIES)} data sources available and current"]
+    if level != "LOW":
+        bits.append(f"{agreeing} independent signal(s) point to elevated risk")
+    if weather_stale:
+        bits.append("weather data is stale")
+    return conf, "; ".join(bits) + ". Describes data coverage, not a calibrated probability."
 
 
 def assess_point(c, lat: float, lng: float) -> Optional[dict]:
@@ -353,7 +377,8 @@ def hotspot_out(r) -> dict:
     return {"id": r["id"], "cell": r["cell"], "latitude": r["latitude"], "longitude": r["longitude"], "radius_km": r["radius_km"],
             "zone": r["zone"], "risk_score": r["risk_score"], "risk_level": r["risk_level"], "signals": json.loads(r["signals"] or "[]"),
             "sources": json.loads(r["sources"] or "[]"), "confidence": r["confidence"], "status": "POTENTIAL FLOOD HOTSPOT",
-            "note": "Potential hotspot from several independent signals; not a confirmed flood.", "created_at": r["created_at"], "updated_at": r["updated_at"]}
+            "note": "Potential hotspot from several independent signals; not a confirmed flood.",
+            "recommended_action": ACTIONS.get(r["risk_level"]), "created_at": r["created_at"], "updated_at": r["updated_at"]}
 
 
 def record_history(c, force: bool = False) -> None:

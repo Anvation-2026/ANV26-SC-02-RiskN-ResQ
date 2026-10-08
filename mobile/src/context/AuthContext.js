@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { apiLogin, apiLogout, apiMe, apiRegister } from '../services/accountApi';
+import { apiLogin, apiLogout, apiMe, apiRegister, verifyLoginCode } from '../services/accountApi';
 import { clearToken, loadToken, saveToken, setUnauthorizedHandler } from '../services/session';
 import { registerForPush, unregisterPush } from '../services/push';
 import { useLang } from '../i18n';
@@ -38,12 +38,24 @@ export function AuthProvider({ children }) {
     })();
   }, [signOutLocally, onSignedIn]);
 
-  const login = useCallback(async (email, password) => {
-    const data = await apiLogin(email.trim(), password); // throws with a readable message on failure
+  // `entering` marks a sign-in that just happened (not a restored session), so the app plays the welcome transition once
+  const signedIn = useCallback(async (data) => {
     await saveToken(data.token);
-    setState({ status: 'in', user: data.user, notice: null });
+    setState({ status: 'in', user: data.user, notice: null, entering: true });
     onSignedIn(data.user);
   }, [onSignedIn]);
+
+  const login = useCallback(async (email, password) => {
+    const data = await apiLogin(email.trim(), password); // throws with a readable message on failure
+    await signedIn(data);
+  }, [signedIn]);
+
+  const loginWithCode = useCallback(async (email, code) => {
+    const data = await verifyLoginCode(email.trim(), code.trim()); // user accounts only; the server refuses everyone else
+    await signedIn(data);
+  }, [signedIn]);
+
+  const entered = useCallback(() => setState((s) => (s.entering ? { ...s, entering: false } : s)), []);
 
   const register = useCallback(async (form) => {
     await apiRegister(form); // the role is decided by the server; the client cannot send one
@@ -58,5 +70,5 @@ export function AuthProvider({ children }) {
 
   const updateUser = useCallback((patch) => setState((s) => (s.user ? { ...s, user: { ...s.user, ...patch } } : s)), []);
 
-  return <AuthContext.Provider value={{ ...state, login, register, logout, updateUser }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ ...state, login, loginWithCode, entered, register, logout, updateUser }}>{children}</AuthContext.Provider>;
 }

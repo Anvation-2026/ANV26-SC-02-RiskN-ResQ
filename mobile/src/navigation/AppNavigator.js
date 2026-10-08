@@ -4,7 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Feather from '@expo/vector-icons/Feather';
 import { useData } from '../context/DataContext';
 import { useT } from '../i18n';
-import { ScreenFade } from '../components/motion';
+import { ScreenFade, TabIcon } from '../components/motion';
 import { colors } from '../theme';
 import HomeScreen from '../screens/HomeScreen';
 import MapScreen from '../screens/MapScreen';
@@ -74,20 +74,9 @@ export default function AppNavigator() {
               accessibilityState={{ selected: isActive }}
               aria-selected={isActive}
             >
-              <View style={styles.iconContainer}>
-                <Feather
-                  name={t.icon}
-                  size={20}
-                  color={isActive ? activeColor : inactiveColor}
-                />
-                {t.key === 'Alerts' && alerts.length > 0 && (
-                  <View style={styles.badge}>
-                    <Text style={styles.badgeText}>
-                      {alerts.length > 9 ? '9+' : alerts.length}
-                    </Text>
-                  </View>
-                )}
-              </View>
+              <TabIcon active={isActive} color={activeColor} badge={t.key === 'Alerts' ? alerts.length : 0}>
+                <Feather name={t.icon} size={20} color={isActive ? activeColor : inactiveColor} />
+              </TabIcon>
               <Text
                 style={[
                   styles.label,
@@ -96,7 +85,6 @@ export default function AppNavigator() {
               >
                 {t18(`tab.${t.key}`)}
               </Text>
-              {isActive && <View style={styles.activeDot} />}
             </Pressable>
           );
         })}

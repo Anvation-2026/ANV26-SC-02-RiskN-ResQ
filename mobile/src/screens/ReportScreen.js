@@ -142,11 +142,19 @@ export default function ReportScreen({ navigate }) {
               <PopIn><View style={styles.check}>
                 <Feather name="check" size={24} color="#FFFFFF" />
               </View></PopIn>
-              <Text style={styles.sTitle}>Incident Broadcast</Text>
+              <Text style={styles.sTitle}>Report submitted</Text>
               <Text style={styles.sBody}>
                 Your report has been logged. It is compared with weather, satellite and terrain data and supports the flood-risk estimate; one report on its own does not declare a flood.
               </Text>
-              {submitted && submitted.merged_into ? <Text style={styles.photoOk}>Similar nearby reports were merged, which raises confidence in this one.</Text> : null}
+              {submitted && submitted.merged_into ? (
+                <Text style={styles.photoOk}>This incident appears to match an existing report nearby (#{submitted.merged_into}). It was added to that report, which raises its confidence.</Text>
+              ) : null}
+              {submitted ? (
+                <Text style={styles.sBody}>
+                  Verification: <Text style={{ fontFamily: 'PlusJakartaSans_700Bold' }}>{submitted.status === 'VERIFIED' ? 'verified' : 'pending administrator review'}</Text>
+                  {submitted.trustScore != null || submitted.trust_score != null ? ` · trust ${submitted.trustScore ?? submitted.trust_score}/100` : ''}
+                </Text>
+              ) : null}
               {submitted && submitted.environmental_context ? (
                 <View style={{ alignSelf: 'stretch', marginTop: 10 }}>
                   <Text style={styles.sBody}>Incident confidence: {String(submitted.confidence || '').toLowerCase()}. Environment at this spot:</Text>

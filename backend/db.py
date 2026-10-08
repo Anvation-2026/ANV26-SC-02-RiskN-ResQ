@@ -788,6 +788,14 @@ def reset_db() -> None:
         c.execute("UPDATE volunteers SET available=1 WHERE status='ACTIVE'")
 
 
+def road_scope(c) -> str:
+    """SQL condition selecting the roads the app should use. The three SEED roads are synthetic reference geometry for an
+    empty install (and the tests); once real roads have been imported from OpenStreetMap they are hidden everywhere."""
+    if c.execute("SELECT 1 FROM roads WHERE COALESCE(source, 'SEED') <> 'SEED' LIMIT 1").fetchone():
+        return "COALESCE(source, 'SEED') <> 'SEED'"
+    return "1=1"
+
+
 def seed_state(c) -> None:
     """Initial demo state: LOW rainfall, all roads AVAILABLE, no alerts. Synthetic data, not live readings."""
     t = now()

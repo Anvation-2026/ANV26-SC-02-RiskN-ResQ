@@ -81,6 +81,62 @@ def forgot_password(body: ForgotIn):
     return {"status": "If that email has an account, a reset code has been sent."}
 
 
+# ---------------------------------------------------------------------------------------------- email sign-in code
+# Passwordless sign-in for USERS only: a 6-digit code (stored hashed, 10 minutes, 5 guesses) is emailed to the account.
+# Volunteer and Super Admin accounts never receive one; they sign in with their password.
+LOGIN_CODE_MINUTES = 10
+LOGIN_CODE_COOLDOWN_S = 30
+
+
+class LoginCodeIn(BaseModel):
+    email: str = Field(..., max_length=254)
+
+
+class LoginCodeVerifyIn(BaseModel):
+    email: str = Field(..., max_length=254)
+    code: str = Field(..., min_length=4, max_length=12)
+
+
+@router.post("/auth/login-code/request")
+def request_login_code(body: LoginCodeIn):
+    """Always answers the same way (whether or not the email has a user account), so it cannot reveal who is registered."""
+    email = body.email.strip().lower()
+    with db.session() as c:
+        row = c.execute("SELECT * FROM users WHERE LOWER(email)=? AND is_active=1", (email,)).fetchone()
+        if row and row["role"] == auth.ROLE_USER:
+            last = c.execute("SELECT created_at FROM auth_tokens WHERE user_id=? AND kind='LOGIN' AND used_at IS NULL ORDER BY id DESC",
+                             (row["id"],)).fetchone()
+            recent = last and last["created_at"] > _iso(datetime.now(timezone.utc) - timedelta(seconds=LOGIN_CODE_COOLDOWN_S))
+            if not recent:  # a double tap or an impatient resend does not flood the inbox
+                code = issue_code(c, row["id"], "LOGIN", LOGIN_CODE_MINUTES)
+                notify.email(email, f"{code} is your RiskN ResQ sign-in code",
+                             f"Hello {row['name']},\n\nYour RiskN ResQ sign-in code is {code}. It is valid for {LOGIN_CODE_MINUTES} minutes.\n"
+                             f"If you did not try to sign in, ignore this message: nobody can sign in without this code.")
+    return {"status": "If this email belongs to a RiskN ResQ user account, a sign-in code has been sent to it.",
+            "expires_in_minutes": LOGIN_CODE_MINUTES, "resend_after_seconds": LOGIN_CODE_COOLDOWN_S,
+            "note": "Volunteer and admin accounts sign in with their password."}
+
+
+@router.post("/auth/login-code/verify")
+def verify_login_code(body: LoginCodeVerifyIn):
+    email = body.email.strip().lower()
+    if auth.throttled(email):
+        raise HTTPException(429, "Too many failed attempts. Please wait a few minutes and try again.")
+    out = None
+    with db.session() as c:
+        row = c.execute("SELECT * FROM users WHERE LOWER(email)=? AND is_active=1", (email,)).fetchone()
+        if row and row["role"] == auth.ROLE_USER and _consume(c, row["id"], "LOGIN", body.code):
+            c.execute("UPDATE users SET email_verified=1 WHERE id=?", (row["id"],))  # the code proves they own the inbox
+            token, expires = auth.create_session(c, row["id"])
+            fresh = c.execute("SELECT * FROM users WHERE id=?", (row["id"],)).fetchone()
+            out = {"token": token, "token_type": "bearer", "expires_at": expires, "user": auth.user_public(fresh)}
+    if out is None:  # outside the transaction, so the wrong-guess counter is saved rather than rolled back
+        auth.record_failure(email)
+        raise HTTPException(400, "That code is invalid or has expired.")
+    auth.clear_failures(email)
+    return out
+
+
 @router.post("/auth/reset-password")
 def reset_password(body: ResetIn):
     email = body.email.strip().lower()

@@ -10,7 +10,6 @@ import { useT } from '../i18n';
 import { cellCorners, drawableCells, drawableRain, RAIN_COLOR, RAIN_FILL, RAIN_RADIUS_KM, RISK_COLOR, RISK_FILL, SAT_COLOR, TERRAIN_COLOR } from './rain';
 
 const DEFAULT_POINT = { latitude: 12.9716, longitude: 77.5946 }; // used only when no location is available
-const ZONE_RADIUS_KM = { LOW: 0, MEDIUM: 0.7, MODERATE: 0.7, HIGH: 1.2, CRITICAL: 1.8 };
 const TILES = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 const ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
 
@@ -30,8 +29,14 @@ export default function MapView({
   risk, roads: rawRoads, blocked: rawBlocked, alternative, incidents: rawIncidents, height = 340,
   zones: rawZones, routeLine: rawRoute, markers: rawMarkers, user: rawUser, labelBlockedOnly = false,
   rainAreas = [], onRainPress, places = [], onPlacePress,
-  riskCells = [], satelliteCells = [], hotspots = [], terrainCells = [], cellHalf, onIntelPress,
+  riskCells = [], satelliteCells = [], hotspots = [], terrainCells = [], cellHalf, onIntelPress, onRoadPress, onIncidentPress, onMarkerPress,
 }) {
+  const roadCb = useRef(onRoadPress);
+  roadCb.current = onRoadPress;
+  const incCb = useRef(onIncidentPress);
+  incCb.current = onIncidentPress;
+  const markerCb = useRef(onMarkerPress);
+  markerCb.current = onMarkerPress;
   const intelCb = useRef(onIntelPress);
   intelCb.current = onIntelPress;
   const rainCb = useRef(onRainPress);
@@ -95,7 +100,8 @@ export default function MapView({
     // terrain susceptibility (ground that collects water; not evidence of flooding), then flood-risk cells, under everything else
     if (cellHalf) {
       (Array.isArray(terrainCells) ? terrainCells : []).forEach((cell) => {
-        L.polygon(cellCorners(cell, cellHalf), { color: TERRAIN_COLOR, weight: 0, fillColor: TERRAIN_COLOR, fillOpacity: 0.14, interactive: false }).addTo(layer);
+        L.polygon(cellCorners(cell, cellHalf), { color: TERRAIN_COLOR, weight: 1, dashArray: '2 4', fillColor: TERRAIN_COLOR, fillOpacity: 0.16 })
+          .on('click', () => intelCb.current && intelCb.current({ kind: 'terrain', cell })).addTo(layer);
       });
       drawableCells(riskCells).forEach((cell) => {
         // keep the cell you are in, and any cell that is MEDIUM or worse, inside the view
@@ -128,7 +134,7 @@ export default function MapView({
     // flood-risk zones
     const zoneList = Array.isArray(rawZones)
       ? rawZones.filter((z) => ok(z.latitude, z.longitude)).map((z) => ({ lat: z.latitude, lng: z.longitude, km: z.radiusKm, level: z.level }))
-      : user && ZONE_RADIUS_KM[level] ? [{ lat: user.latitude, lng: user.longitude, km: ZONE_RADIUS_KM[level], level }] : [];
+      : []; // never draw an invented zone around the user: flood risk is shown by the backend's risk cells
     zoneList.filter((z) => z.km > 0).forEach((z) => {
       const c = riskColor(z.level);
       const circle = L.circle([z.lat, z.lng], { radius: z.km * 1000, color: c, weight: 2, fillColor: c, fillOpacity: 0.2 }).bindTooltip(`${z.level} flood risk zone`).addTo(layer);
@@ -136,15 +142,20 @@ export default function MapView({
     });
 
     // roads (blocked ones red + dashed, with a barrier marker)
+    // road states come from the backend: VERIFIED BLOCKED (solid red), REPORTED BLOCKED (dashed red), POTENTIALLY AFFECTED (dashed orange)
     roads.forEach((r) => {
-      const isBlocked = blockedIds.has(r.id) || r.status === 'BLOCKED';
+      const verified = r.risk_state === 'VERIFIED_BLOCKED' || r.status === 'BLOCKED';
+      const reported = !verified && (r.risk_state === 'REPORTED_BLOCKED' || blockedIds.has(r.id));
+      const isBlocked = verified || reported;
       const isAlt = r.id === altId;
       const potential = !isBlocked && r.risk_state === 'POTENTIALLY_AFFECTED';
-      const color = isBlocked ? colors.HIGH : isAlt ? colors.route : potential ? '#F97316' : r.low_lying ? '#F59E0B' : '#64748B';
-      L.polyline(r.coordinates, { color: '#fff', weight: 11, opacity: 0.9 }).addTo(layer);
-      L.polyline(r.coordinates, { color, weight: isBlocked || isAlt ? 7 : 5, opacity: 0.95, dashArray: isBlocked ? '10 8' : potential ? '4 6' : null })
-        .bindTooltip(esc(r.name || 'Road') + (isBlocked ? ' (blocked)' : potential ? ' (potentially affected)' : ''), { permanent: !labelBlockedOnly || isBlocked, direction: 'top', className: 'rr-tip' }).addTo(layer);
-      if (isBlocked) L.marker(r.coordinates[Math.floor(r.coordinates.length / 2)], { icon: emoji('🚧', 30), interactive: false }).addTo(layer);
+      const color = verified ? '#B91C1C' : reported ? colors.HIGH : isAlt ? colors.route : potential ? '#F97316' : r.low_lying ? '#F59E0B' : '#64748B';
+      const word = verified ? ' (verified blocked)' : reported ? ' (reported blocked)' : potential ? ' (potentially affected)' : '';
+      L.polyline(r.coordinates, { color: '#fff', weight: 11, opacity: 0.9, interactive: false }).addTo(layer);
+      L.polyline(r.coordinates, { color, weight: isBlocked || isAlt ? 7 : 5, opacity: 0.95, dashArray: reported ? '10 8' : potential ? '4 6' : null })
+        .bindTooltip(esc(r.name || 'Road') + word, { permanent: !labelBlockedOnly || isBlocked, direction: 'top', className: 'rr-tip' })
+        .on('click', () => roadCb.current && roadCb.current(r)).addTo(layer);
+      if (isBlocked) L.marker(r.coordinates[Math.floor(r.coordinates.length / 2)], { icon: emoji(verified ? '⛔' : '🚧', 30) }).on('click', () => roadCb.current && roadCb.current(r)).addTo(layer);
       if (isBlocked || isAlt) r.coordinates.forEach((p) => bounds.push(p)); // ordinary roads must not zoom the map out
     });
 
@@ -157,15 +168,17 @@ export default function MapView({
 
     // reported incidents
     incidents.forEach((i) => {
-      L.marker([i.latitude, i.longitude], { icon: emoji('⚠️', 28) })
-        .bindTooltip(esc(i.description || String(i.type || 'Incident').replace(/_/g, ' '))).addTo(layer);
+      L.marker([i.latitude, i.longitude], { icon: emoji(i.status === 'VERIFIED' ? '🔺' : '⚠️', 28) })
+        .bindTooltip(esc(String(i.type || 'Incident').replace(/_/g, ' ') + (i.status === 'VERIFIED' ? ' (verified)' : ' (reported)')))
+        .on('click', () => incCb.current && incCb.current(i)).addTo(layer);
       bounds.push([i.latitude, i.longitude]);
     });
 
     // volunteers / requests / destination
     markers.forEach((m) => {
       L.marker([m.latitude, m.longitude], { icon: dot(m.color || colors.LOW, m.highlight ? 26 : 18, !!m.highlight) })
-        .bindTooltip(esc(m.label || ''), { permanent: !!(m.label && m.highlight), direction: 'right', className: 'rr-tip' }).addTo(layer);
+        .bindTooltip(esc(m.label || ''), { permanent: !!(m.label && m.highlight), direction: 'right', className: 'rr-tip' })
+        .on('click', () => markerCb.current && markerCb.current(m)).addTo(layer);
       bounds.push([m.latitude, m.longitude]);
     });
 
@@ -203,10 +216,10 @@ export default function MapView({
   );
 }
 
-const LEGEND = [
+export const LEGEND = [
   ['📍', 'legend.you'], ['🟢', 'legend.lowRisk'], ['🟡', 'legend.medium'], ['🟠', 'legend.high'], ['🔴', 'legend.critical'], ['🌧️', 'legend.rain'],
-  ['🛰️', 'legend.satellite'], ['❗', 'legend.hotspot'], ['🚧', 'legend.blocked'], ['⚠️', 'legend.incident'], ['🛣️', 'legend.route'],
-  ['🏥', 'legend.places'], ['🟧', 'legend.potential'],
+  ['🛰️', 'legend.satellite'], ['❗', 'legend.hotspot'], ['⛔', 'legend.verifiedBlocked'], ['🚧', 'legend.blocked'], ['🟧', 'legend.potential'], ['🟫', 'legend.terrain'],
+  ['⚠️', 'legend.incident'], ['🔺', 'legend.verifiedIncident'], ['🛣️', 'legend.route'], ['🏥', 'legend.places'],
 ];
 
 export function MapLegend({ items }) {

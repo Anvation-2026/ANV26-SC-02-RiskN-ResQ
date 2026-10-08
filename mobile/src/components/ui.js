@@ -1,6 +1,6 @@
 // Small shared building blocks for the account, volunteer and admin screens.
-import React, { useEffect, useRef } from 'react';
-import { Animated, Easing, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Animated, Easing, Modal, PanResponder, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import { colors, fonts, palette, radius, riskColor, riskIndex, riskSoft, riskSurface, shadow } from '../theme';
 import { AnimatedBar, AnimatedNumber, FadeIn, PopIn, Pulse, PressableScale, useReducedMotion } from './motion';
@@ -208,27 +208,50 @@ export function Timeline({ items }) {
 }
 
 // Bottom sheet: slides up over the screen, dismisses on backdrop tap or Close. Content scrolls.
+// Bottom sheet: springs up, animates out on close, and can be swiped down by its handle/header (the phone-native way to dismiss).
 export function Sheet({ visible, onClose, title, children, tone }) {
   const reduced = useReducedMotion();
-  const v = useRef(new Animated.Value(0)).current;
+  const v = useRef(new Animated.Value(0)).current;      // 0 hidden → 1 open
+  const drag = useRef(new Animated.Value(0)).current;   // finger offset while swiping down
+  const [mounted, setMounted] = useState(!!visible);
   useEffect(() => {
-    if (!visible) { v.setValue(0); return undefined; }
-    if (reduced) { v.setValue(1); return undefined; }
-    const a = Animated.timing(v, { toValue: 1, duration: 260, easing: Easing.out(Easing.cubic), useNativeDriver: true });
-    a.start();
+    if (visible) {
+      setMounted(true); drag.setValue(0);
+      if (reduced) { v.setValue(1); return undefined; }
+      v.setValue(0);
+      const a = Animated.spring(v, { toValue: 1, friction: 9, tension: 80, useNativeDriver: true });
+      a.start();
+      return () => a.stop();
+    }
+    if (!mounted) return undefined;
+    if (reduced) { v.setValue(0); setMounted(false); return undefined; }
+    const a = Animated.timing(v, { toValue: 0, duration: 200, easing: Easing.in(Easing.cubic), useNativeDriver: true });
+    a.start(() => setMounted(false));
     return () => a.stop();
   }, [visible, reduced]); // eslint-disable-line react-hooks/exhaustive-deps
+  const pan = useMemo(() => PanResponder.create({
+    onMoveShouldSetPanResponder: (_, g) => g.dy > 6 && Math.abs(g.dy) > Math.abs(g.dx),
+    onPanResponderMove: (_, g) => drag.setValue(Math.max(0, g.dy)),
+    onPanResponderRelease: (_, g) => {
+      if (g.dy > 90 || g.vy > 0.9) onClose && onClose();
+      else Animated.spring(drag, { toValue: 0, friction: 7, tension: 120, useNativeDriver: true }).start();
+    },
+    onPanResponderTerminate: () => Animated.spring(drag, { toValue: 0, useNativeDriver: true }).start(),
+  }), [onClose]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!mounted) return null;
   return (
-    <Modal visible={!!visible} transparent animationType="none" onRequestClose={onClose} statusBarTranslucent>
+    <Modal visible transparent animationType="none" onRequestClose={onClose} statusBarTranslucent>
       <View style={k.sheetRoot}>
         <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(2,6,23,0.45)', opacity: v }]}>
           <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close details" accessibilityRole="button" />
         </Animated.View>
-        <Animated.View style={[k.sheet, tone && { borderTopColor: tone, borderTopWidth: 3 }, { opacity: v, transform: [{ translateY: v.interpolate({ inputRange: [0, 1], outputRange: [60, 0] }) }] }]}>
-          <View style={k.sheetHandle} />
-          <View style={k.sheetHead}>
-            <Text style={k.sheetTitle} numberOfLines={2}>{title}</Text>
-            <Pressable onPress={onClose} hitSlop={12} accessibilityRole="button" accessibilityLabel="Close"><Feather name="x" size={20} color={colors.muted} /></Pressable>
+        <Animated.View style={[k.sheet, tone && { borderTopColor: tone, borderTopWidth: 3 }, { opacity: v, transform: [{ translateY: Animated.add(v.interpolate({ inputRange: [0, 1], outputRange: [120, 0] }), drag) }] }]}>
+          <View {...pan.panHandlers}>
+            <View style={k.sheetHandle} />
+            <View style={k.sheetHead}>
+              <Text style={k.sheetTitle} numberOfLines={2}>{title}</Text>
+              <Pressable onPress={onClose} hitSlop={12} accessibilityRole="button" accessibilityLabel="Close"><Feather name="x" size={20} color={colors.muted} /></Pressable>
+            </View>
           </View>
           <ScrollView contentContainerStyle={{ paddingBottom: 24 }} showsVerticalScrollIndicator={false}>{children}</ScrollView>
         </Animated.View>

@@ -218,7 +218,8 @@ export function DataProvider({ children }) {
     return [...fromAdmin, ...fromIncidents];
   }, [incidents, roadStatus]);
 
-  // Alerts: zone alerts from the backend (with reason and affected road) plus incident-based notices.
+  // Alerts: only backend-generated alerts (engine, satellite, admin broadcasts, drills). Community incident reports are
+  // listed separately as report notices, so a single unverified report never looks like an official alert.
   const alerts = useMemo(() => {
     const fromBackend = zoneAlerts.map((a) => ({
       id: `zone-${a.id}`,
@@ -234,22 +235,20 @@ export function DataProvider({ children }) {
       recommended_action: a.recommended_action,
       probability: a.probability,
     }));
-    const fromIncidents = incidents
-      .filter((inc) => inc.status !== 'RESOLVED' && (inc.severity >= 3 || inc.type === 'FLOODED_ROAD' || inc.type === 'BLOCKED_ROAD'))
-      .map((inc) => ({
-        id: `inc-${inc.id}`,
-        severity: inc.severity >= 4 ? 'HIGH' : inc.severity === 3 ? 'MODERATE' : 'LOW',
-        message: inc.description || `${inc.type.replace('_', ' ')} reported in monitored sector`,
-        affected_zone: locationLabel,
-        created_at: inc.timestamp || inc.created_at,
-      }));
-    return [...fromBackend, ...fromIncidents].sort(
+    return fromBackend.sort(
       (a, b) =>
         rank(b.severity) - rank(a.severity) ||
         String(a.affected_zone || '').localeCompare(String(b.affected_zone || '')) || // steady order between equal alerts
         String(b.created_at).localeCompare(String(a.created_at))
     );
-  }, [zoneAlerts, incidents, locationLabel]);
+  }, [zoneAlerts]);
+
+  // Significant community reports (flooded / blocked roads, severity 3+): shown under "Community reports", never as alerts.
+  const reportNotices = useMemo(() => incidents
+    .filter((inc) => inc.status !== 'RESOLVED' && (inc.severity >= 3 || inc.type === 'FLOODED_ROAD' || inc.type === 'BLOCKED_ROAD'))
+    .map((inc) => ({ id: inc.id, type: inc.type, status: inc.status, description: inc.description, trustScore: inc.trustScore, confidence: inc.confidence,
+      latitude: inc.latitude, longitude: inc.longitude, created_at: inc.timestamp || inc.created_at }))
+    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))), [incidents]);
 
   // Effective risk: the position-based reading, raised to the strongest active zone alert if that is higher.
   const effectiveRisk = useMemo(() => {
@@ -287,6 +286,7 @@ export function DataProvider({ children }) {
     blocked,
     roads: roadStatus,
     alerts,
+    reportNotices,
     activeAssistance,
     source,
     lastUpdated,

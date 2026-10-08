@@ -11,10 +11,12 @@ import { FadeIn, staggerDelay } from '../components/motion';
 import { SkeletonCard } from '../components/ui';
 import { useData } from '../context/DataContext';
 import { colors, radius, shadow } from '../theme';
+import Feather from '@expo/vector-icons/Feather';
+import { timeAgo } from '../services/geo';
 
 export default function AlertsScreen({ navigate }) {
   const insets = useSafeAreaInsets();
-  const { alerts, blocked, loading, source, backendError } = useData();
+  const { alerts, reportNotices, blocked, loading, source, backendError } = useData();
   const urgentCount = alerts.filter((a) => a.severity === 'HIGH' || a.severity === 'CRITICAL').length;
   const road = blocked.length ? blocked.map((r) => r.name).join(', ') : null;
 
@@ -52,6 +54,26 @@ export default function AlertsScreen({ navigate }) {
             </Text>
           </View>
         )}
+        {reportNotices && reportNotices.length > 0 ? (
+          <View style={{ marginTop: 6 }}>
+            <Text style={styles.section}>COMMUNITY REPORTS</Text>
+            <Text style={styles.sectionNote}>Reports from people nearby. They support the environmental data but are not official alerts.</Text>
+            {reportNotices.slice(0, 6).map((r, i) => (
+              <FadeIn key={r.id} delay={staggerDelay(i, 50, 250)}>
+                <View style={styles.report}>
+                  <Feather name="alert-triangle" size={14} color={r.status === 'VERIFIED' ? colors.HIGH : '#D97706'} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.reportTitle}>{String(r.type || 'Incident').replace(/_/g, ' ')}{r.description ? ` · ${r.description}` : ''}</Text>
+                    <Text style={styles.reportSub}>
+                      {r.status === 'VERIFIED' ? 'Verified by an administrator' : 'Not yet verified'}
+                      {r.trustScore != null ? ` · trust ${r.trustScore}/100` : ''} · {timeAgo(r.created_at)}
+                    </Text>
+                  </View>
+                </View>
+              </FadeIn>
+            ))}
+          </View>
+        ) : null}
         <SafetyGuide />
       </ScrollView>
     </View>
@@ -59,6 +81,11 @@ export default function AlertsScreen({ navigate }) {
 }
 
 const styles = StyleSheet.create({
+  section: { fontFamily: 'PlusJakartaSans_800ExtraBold', fontSize: 12, letterSpacing: 0.8, color: colors.muted, marginTop: 8 },
+  sectionNote: { fontFamily: 'PlusJakartaSans_500Medium', fontSize: 12, color: colors.muted, marginTop: 2, marginBottom: 8, lineHeight: 17 },
+  report: { flexDirection: 'row', gap: 10, backgroundColor: colors.card, borderRadius: 14, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: '#E2E8F0' },
+  reportTitle: { fontFamily: 'PlusJakartaSans_700Bold', fontSize: 13, color: colors.text },
+  reportSub: { fontFamily: 'PlusJakartaSans_500Medium', fontSize: 12, color: colors.muted, marginTop: 2 },
   summary: { fontFamily: 'PlusJakartaSans_800ExtraBold', fontSize: 13, color: colors.muted, marginBottom: 10 },
   emptySymbol: { width: 64, height: 64, borderRadius: 16, marginBottom: 10 },
   root: {

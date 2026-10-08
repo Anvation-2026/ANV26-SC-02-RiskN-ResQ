@@ -123,7 +123,8 @@ export function PopIn({ children, delay = 0, style }) {
   return <Animated.View style={[{ opacity: v, transform: [{ scale: v.interpolate({ inputRange: [0, 1], outputRange: [0.4, 1] }) }] }, style]}>{children}</Animated.View>;
 }
 
-// Cross-fades a screen in when it becomes the active tab (inactive tabs stay mounted but hidden).
+// Brings a screen in when it becomes the active tab (inactive tabs stay mounted but hidden): a quick fade with a short rise,
+// fast enough (200 ms) that switching tabs never feels slow on a phone.
 export function ScreenFade({ active, children, style }) {
   const reduced = useReducedMotion();
   const v = useRef(new Animated.Value(active ? 1 : 0)).current;
@@ -131,9 +132,39 @@ export function ScreenFade({ active, children, style }) {
     if (!active) { v.setValue(0); return undefined; }
     if (reduced) { v.setValue(1); return undefined; }
     v.setValue(0.0);
-    const a = Animated.timing(v, { toValue: 1, duration: 180, easing: Easing.out(Easing.quad), useNativeDriver: true });
+    const a = Animated.timing(v, { toValue: 1, duration: 200, easing: Easing.out(Easing.cubic), useNativeDriver: true });
     a.start();
     return () => a.stop();
   }, [active, reduced]); // eslint-disable-line react-hooks/exhaustive-deps
-  return <Animated.View style={[{ flex: 1, opacity: v }, style]}>{children}</Animated.View>;
+  return <Animated.View style={[{ flex: 1, opacity: v, transform: [{ translateY: v.interpolate({ inputRange: [0, 1], outputRange: [8, 0] }) }] }, style]}>{children}</Animated.View>;
+}
+
+// Bottom-tab icon: the active tab gets a soft pill that springs in behind a slightly lifted icon; badges pop when they appear.
+export function TabIcon({ active, children, badge, color = '#1565FF', compact = false }) {
+  const w = compact ? 38 : 52; // compact for bars with many tabs (the admin bar has 8), so nothing overflows a small phone
+  const reduced = useReducedMotion();
+  const v = useRef(new Animated.Value(active ? 1 : 0)).current;
+  const b = useRef(new Animated.Value(badge ? 1 : 0)).current;
+  useEffect(() => {
+    if (reduced) { v.setValue(active ? 1 : 0); return; }
+    Animated.spring(v, { toValue: active ? 1 : 0, friction: 7, tension: 160, useNativeDriver: true }).start();
+  }, [active, reduced]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (reduced || !badge) { b.setValue(badge ? 1 : 0); return; }
+    b.setValue(0.3);
+    Animated.spring(b, { toValue: 1, friction: 4, tension: 200, useNativeDriver: true }).start();
+  }, [badge, reduced]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <View style={{ width: w, height: 30, alignItems: 'center', justifyContent: 'center' }}>
+      <Animated.View style={{ position: 'absolute', width: w, height: 30, borderRadius: 15, backgroundColor: color + '1F', opacity: v, transform: [{ scaleX: v.interpolate({ inputRange: [0, 1], outputRange: [0.4, 1] }) }] }} />
+      <Animated.View style={{ transform: [{ translateY: v.interpolate({ inputRange: [0, 1], outputRange: [0, -1] }) }, { scale: v.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) }] }}>
+        {children}
+      </Animated.View>
+      {badge ? (
+        <Animated.View style={{ position: 'absolute', top: -2, right: compact ? 0 : 6, minWidth: 16, height: 16, borderRadius: 8, backgroundColor: '#DC2626', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3, borderWidth: 1.5, borderColor: '#FFFFFF', transform: [{ scale: b }] }}>
+          <Text style={{ color: '#FFFFFF', fontSize: 9, lineHeight: 11, fontFamily: 'PlusJakartaSans_800ExtraBold' }}>{badge > 9 ? '9+' : badge}</Text>
+        </Animated.View>
+      ) : null}
+    </View>
+  );
 }

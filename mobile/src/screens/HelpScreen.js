@@ -15,15 +15,19 @@ import { Card, SectionTitle, Timeline } from '../components/ui';
 import { newRequestKey } from '../services/api';
 import { colors, radius, shadow } from '../theme';
 
+// supplies first (matched to volunteers holding that resource), then the emergency-assistance categories
 const HELP = [
+  ['MEDICINE', 'Medicine'],
+  ['FOOD', 'Food'],
+  ['WATER', 'Water'],
+  ['FIRST_AID', 'First Aid'],
+  ['EVACUATION', 'Evacuation'],
   ['MEDICAL_EMERGENCY', 'Medical Emergency'],
   ['FLOOD_RESCUE', 'Flood Rescue'],
-  ['EVACUATION', 'Evacuation'],
   ['ELDERLY_ASSISTANCE', 'Elderly Assistance'],
   ['CHILD_ASSISTANCE', 'Child Assistance'],
   ['FOOD_WATER', 'Food / Water'],
   ['TRANSPORT', 'Transport'],
-  ['FIRST_AID', 'First Aid'],
   ['OTHER_EMERGENCY', 'Other Emergency'],
 ];
 
@@ -40,7 +44,7 @@ export default function HelpScreen({ navigate }) {
   const { userLocation, locationLabel, requestPermission } = useData();
   const { requestResource } = useResponse();
 
-  const [type, setType] = useState('MEDICAL_EMERGENCY');
+  const [type, setType] = useState('MEDICINE');
   const [priority, setPriority] = useState('HIGH');
   const [phone, setPhone] = useState('');
   const [notes, setNotes] = useState('');

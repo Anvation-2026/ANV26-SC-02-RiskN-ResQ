@@ -19,9 +19,9 @@ test('capture all screens', async ({ browser }) => {
   // user
   let ctx = await browser.newContext(phone); let page = await ctx.newPage();
   await openApp(page); await shot(page, '01-login');
-  await login(page, USER); await text(page, 'FLOOD RISK ASSESSMENT').waitFor({ timeout: 90_000 });
+  await login(page, USER); await text(page, 'FLOOD INTELLIGENCE').waitFor({ timeout: 90_000 });
   await shot(page, '02-user-home');
-  await text(page, 'Why this risk? ▼').click(); await shot(page, '03-user-home-why');
+  await text(page, 'Why this risk? See every signal').click(); await shot(page, '03-user-home-why');
   for (const [name, n] of [['04-user-map', 'Map'], ['06-user-report', 'Report'], ['07-user-help', 'Help'], ['08-user-alerts', 'Alerts'], ['09-user-account', 'Account']]) {
     await tab(page, n).click(); await shot(page, name);
   }

@@ -5,6 +5,7 @@ import json
 import math
 from typing import Optional
 
+import db
 import flood_intel
 from engine import haversine_meters
 
@@ -72,7 +73,7 @@ def assess_roads(c) -> list:
     incidents = c.execute("SELECT id, type, status, trust_score, latitude, longitude, description FROM incidents "
                           "WHERE duplicate_of IS NULL AND status IN ('REPORTED','VERIFIED') AND type IN ('BLOCKED_ROAD','FLOODED_ROAD')").fetchall()
     out = []
-    for r in c.execute("SELECT * FROM roads ORDER BY id").fetchall():
+    for r in c.execute(f"SELECT * FROM roads WHERE {db.road_scope(c)} ORDER BY id").fetchall():
         pts = json.loads(r["coordinates"])
         keys = r.keys()
         low = bool(r["low_lying"]) if "low_lying" in keys else False
@@ -108,7 +109,7 @@ def blocked_polylines(c, states=(VERIFIED_BLOCKED, REPORTED_BLOCKED)) -> list:
     """(road name, state, points) for roads that are blocked on evidence, used to keep routes off them."""
     info = {x["id"]: x for x in assess_roads(c)}
     out = []
-    for r in c.execute("SELECT id, name, coordinates FROM roads").fetchall():
-        if info[r["id"]]["state"] in states:
+    for r in c.execute(f"SELECT id, name, coordinates FROM roads WHERE {db.road_scope(c)}").fetchall():
+        if r["id"] in info and info[r["id"]]["state"] in states:
             out.append((r["name"], info[r["id"]]["state"], json.loads(r["coordinates"])))
     return out

@@ -47,6 +47,7 @@ export default function HomeScreen({ navigate }) {
     blocked,
     activeAssistance,
     source,
+    cachedAt,
     lastUpdated,
     requestPermission,
     applyManualLocation,
@@ -173,23 +174,8 @@ export default function HomeScreen({ navigate }) {
         {/* 2. REAL MULTI-FACTOR FLOOD RISK CARD */}
         <RiskCard
           offline={source !== 'live'}
-          risk={
-            risk
-              ? {
-                  score: risk.score ?? risk.risk_score ?? 0,
-                  level: currentLevel,
-                  reason: risk.reason,
-                  drill: risk.drill,
-                  zoneAlert: risk.zoneAlert,
-                  probability: risk.probability,
-                  probabilityBasis: risk.probability_basis,
-                  insufficient: risk.insufficient,
-                  signals: risk.signals,
-                  missing: risk.missing,
-                  model: risk.model,
-                }
-              : null
-          }
+          cachedAt={cachedAt}
+          risk={risk ? { ...risk, score: risk.score ?? risk.risk_score ?? 0, level: currentLevel, probabilityBasis: risk.probability_basis } : null}
         />
 
 
@@ -205,41 +191,6 @@ export default function HomeScreen({ navigate }) {
             Risk history, {intel.risk_history.zone}: {intel.risk_history.steps.map((x) => `${new Date(x.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} → ${x.risk_level}`).join('   ')}
           </Text>
         ) : null}
-
-        {/* 3. ENVIRONMENTAL TELEMETRY ATTRIBUTION */}
-        {risk && (
-          <View style={styles.telemetryCard}>
-            <View style={styles.telemetryHeader}>
-              <Text style={styles.telemetryKicker}>ENVIRONMENTAL TELEMETRY</Text>
-              <Text style={styles.telemetryTime}>
-                {lastUpdated ? `Updated ${timeAgo(new Date(lastUpdated).toISOString())}` : 'Live'}
-              </Text>
-            </View>
-            <View style={styles.telemetryGrid}>
-              <View style={styles.telemetryItem}>
-                <Text style={styles.telemetryLabel}>24h Rainfall</Text>
-                <Text style={styles.telemetryValue}>
-                  {risk.rainfall_24h_mm != null ? `${Number(risk.rainfall_24h_mm).toFixed(1)} mm` : '0.0 mm'}
-                </Text>
-              </View>
-              <View style={styles.telemetryItem}>
-                <Text style={styles.telemetryLabel}>Rain Rate</Text>
-                <Text style={styles.telemetryValue}>
-                  {risk.rainfall_intensity_mm_per_hour != null
-                    ? `${Number(risk.rainfall_intensity_mm_per_hour).toFixed(1)} mm/h`
-                    : '0.0 mm/h'}
-                </Text>
-              </View>
-              <View style={styles.telemetryItem}>
-                <Text style={styles.telemetryLabel}>Active Incidents</Text>
-                <Text style={styles.telemetryValue}>{activeIncidents.length}</Text>
-              </View>
-            </View>
-            {risk.weather_source && (
-              <Text style={styles.attributionText}>Source: {risk.weather_source}</Text>
-            )}
-          </View>
-        )}
 
         {/* 3b. RAINFALL OBSERVATIONS (accumulation over the last 1 / 3 / 6 / 24 hours, from the backend's cached grid) */}
         <FadeIn delay={staggerDelay(3)}>

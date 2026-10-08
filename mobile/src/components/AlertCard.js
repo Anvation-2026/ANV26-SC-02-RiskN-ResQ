@@ -13,10 +13,12 @@ const Field = ({ label, value }) => (
   </View>
 );
 
+// A backend-generated alert. A SIMULATED DRILL never looks like a real emergency: neutral purple, dashed border, its own heading.
 export default function AlertCard({ alert, road, onViewRoute }) {
   const level = alert.severity === 'MODERATE' ? 'MEDIUM' : alert.severity;
-  const c = riskColor(alert.severity);
-  const urgent = level === 'HIGH' || level === 'CRITICAL';
+  const drill = !!alert.drill;
+  const c = drill ? '#6D28D9' : riskColor(alert.severity);
+  const urgent = !drill && (level === 'HIGH' || level === 'CRITICAL');
   const area = alert.affected_zone || alert.zone || 'Monitored area';
   const roadText = alert.affected_road || road || 'None reported';
   const when = timeAgo(alert.created_at || alert.createdAt);
@@ -24,13 +26,21 @@ export default function AlertCard({ alert, road, onViewRoute }) {
   const sources = Array.isArray(alert.sources) ? alert.sources.filter((x) => x.source) : [];
 
   return (
-    <View style={[styles.card, { borderLeftColor: c }, urgent && { backgroundColor: c + '0D', borderColor: c + '55' }]}>
+    <View style={[styles.card, { borderLeftColor: c }, urgent && { backgroundColor: c + '0D', borderColor: c + '55' }, drill && styles.drillCard]}>
+      {drill ? (
+        <View style={styles.drillBanner} accessibilityRole="header">
+          <Feather name="info" size={13} color="#6D28D9" />
+          <Text style={styles.drillBannerText}>SIMULATED DRILL · NOT A REAL ALERT</Text>
+        </View>
+      ) : null}
       <View style={styles.headerRow}>
-        <Feather name={urgent ? 'alert-octagon' : 'alert-circle'} size={16} color={c} style={{ marginRight: 6 }} />
-        <Text style={[styles.title, { color: c }]}>{satellite ? 'SATELLITE WATER CHANGE' : `${level} FLOOD RISK`}</Text>
-        {alert.drill ? (
+        <Feather name={drill ? 'clipboard' : urgent ? 'alert-octagon' : 'alert-circle'} size={16} color={c} style={{ marginRight: 6 }} />
+        <Text style={[styles.title, { color: c, flex: 1 }]}>{satellite ? 'SATELLITE WATER CHANGE' : `${level} FLOOD RISK`}</Text>
+        {drill ? (
           <View style={styles.drill}><Text style={styles.drillText}>SIMULATED</Text></View>
-        ) : null}
+        ) : (
+          <View style={[styles.real, { backgroundColor: c + '1A' }]}><Text style={[styles.drillText, { color: c }]}>REAL ALERT</Text></View>
+        )}
       </View>
 
       <Text style={styles.msg}>{alert.message}</Text>
@@ -48,7 +58,7 @@ export default function AlertCard({ alert, road, onViewRoute }) {
       {onViewRoute ? (
         <ActionButton
           variant="primary"
-          label="VIEW ALTERNATIVE ROUTE"
+          label="VIEW LOWER-RISK ROUTE ON MAP"
           color={c}
           onPress={onViewRoute}
         />
@@ -58,6 +68,10 @@ export default function AlertCard({ alert, road, onViewRoute }) {
 }
 
 const styles = StyleSheet.create({
+  drillCard: { backgroundColor: '#FAF5FF', borderStyle: 'dashed', borderColor: '#C4B5FD', borderLeftWidth: 5 },
+  drillBanner: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#EDE9FE', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, marginBottom: 10 },
+  drillBannerText: { color: '#5B21B6', fontSize: 11, fontFamily: 'PlusJakartaSans_800ExtraBold', letterSpacing: 0.6 },
+  real: { marginLeft: 8, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 },
   drill: { marginLeft: 8, backgroundColor: '#EDE9FE', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 },
   drillText: { color: '#6D28D9', fontSize: 10, fontFamily: 'PlusJakartaSans_800ExtraBold', letterSpacing: 0.6 },
   card: {

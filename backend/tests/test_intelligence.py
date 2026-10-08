@@ -938,3 +938,23 @@ def test_ml_pipeline_mechanics_on_synthetic_rows():
     assert p > 0.5 and basis.startswith("Trained model")
     ml_model.MODEL_PATH.unlink(missing_ok=True)
     ml_model.reset_cache()
+
+
+def test_risk_reports_data_confidence_freshness_and_rain_figures(client):
+    refresh(r24=60.0)
+    p = anon().get("/flood-risk", params={"latitude": 12.99, "longitude": 77.62}).json()
+    assert p["confidence"] in ("HIGH", "MEDIUM", "LOW") and "not a calibrated probability" in p["confidence_basis"]
+    assert p["computed_at"] and p["features"]["rain_24h"] == 60.0
+    s = anon().get("/sync", params={"latitude": 12.99, "longitude": 77.62}).json()["risk"]
+    assert s["confidence"] == p["confidence"] and s["recommended_action"] and s["rain_1h_mm"] is not None and "forecast_3h_mm" in s
+    assert s["computed_at"] and s["weather_stale"] is False
+
+
+def test_data_confidence_falls_when_signals_are_missing_or_stale():
+    sig = lambda k, stale=False: {"key": k, "points": 0, "stale": stale}  # noqa: E731
+    full = [sig(k) for k in fi.CORE_FAMILIES]
+    assert fi.data_confidence(full, [], False, 0, "LOW")[0] == "HIGH"
+    assert fi.data_confidence(full[:3], [], False, 0, "LOW")[0] == "MEDIUM"
+    assert fi.data_confidence(full[:2], [], False, 0, "LOW")[0] == "LOW"
+    assert fi.data_confidence(full, [], True, 0, "LOW")[0] == "LOW"                 # stale weather is never high confidence
+    assert fi.data_confidence(full, [], False, 1, "HIGH")[0] == "MEDIUM"            # one signal alone does not make an elevated estimate high-confidence

@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Tuple
 
 from providers.weather.base import WeatherObservation
 from providers.routing.base import RouteCandidate
+import db
 from db import ZONES, nearest_zone, now
 
 
@@ -330,7 +331,7 @@ def blocked_roads(c, zone: str) -> list:
     """Names of BLOCKED roads whose start point lies in this zone."""
     out = []
     try:
-        for r in c.execute("SELECT name, coordinates FROM roads WHERE status='BLOCKED' ORDER BY id"):
+        for r in c.execute(f"SELECT name, coordinates FROM roads WHERE status='BLOCKED' AND {db.road_scope(c)} ORDER BY id"):
             first = json.loads(r["coordinates"])[0]
             if nearest_zone(first[0], first[1]) == zone:
                 out.append(r["name"])

@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import { expect, test } from '@playwright/test';
 import { ADMIN, API, PNG, USER, VOLUNTEER, apiLogin, login, logoutFromAccount, openApp, tab, text } from './helpers';
 
@@ -42,13 +43,44 @@ test('user registers and reads weather, risk, explanation and risk history', asy
   await page.getByPlaceholder('Repeat your password').fill(USER.password);
   await page.getByText('CREATE ACCOUNT', { exact: true }).click();
   await expect(text(page, 'CURRENT WEATHER')).toBeVisible({ timeout: 90_000 });
-  await expect(text(page, 'FLOOD RISK ASSESSMENT')).toBeVisible({ timeout: 60_000 });
-  await expect(text(page, /Flood probability \d+% \(prototype estimate\)/)).toBeVisible();
-  await text(page, 'Why this risk? ▼').click();
+  await expect(text(page, 'FLOOD INTELLIGENCE')).toBeVisible({ timeout: 60_000 });
+  await expect(text(page, /Probability \d+% \(prototype\)/)).toBeVisible();
+  await expect(text(page, /^Confidence: (High|Medium|Low)$/)).toBeVisible();       // data confidence from the backend
+  await expect(text(page, 'WHY THIS RISK?')).toBeVisible();
+  await expect(text(page, 'RECOMMENDED ACTION')).toBeVisible();
+  await text(page, 'Why this risk? See every signal').click();
+  await expect(text(page, /IMPACT (NONE|LOW|MEDIUM|HIGH)/)).toBeVisible();          // every signal carries its contribution
   await expect(text(page, /Open-Meteo/)).toBeVisible();
   await expect(text(page, /Prototype flood-risk model/)).toBeVisible();
   // weather is real or honestly unavailable, never a made-up number
   await expect(page.locator('body')).toContainText(/Last updated|Weather data unavailable/);
+});
+
+test('user signs in with an emailed code; volunteers never receive one', async ({ page }) => {
+  // no SMTP on the isolated test backend, so the email lands in its log (the documented development fallback)
+  const LOG = '/tmp/riskn_e2e_backend.log';
+  const codesFor = (email: string) => (fs.readFileSync(LOG, 'utf8').match(new RegExp(`To: ${email.replace(/[.+]/g, '\\$&')} \\| (\\d{6}) is your RiskN ResQ sign-in code`, 'g')) || []);
+  await openApp(page);
+  await page.getByRole('tab', { name: 'Email code' }).click();
+  await page.getByPlaceholder('you@example.com').fill(USER.email);
+  await page.getByText('SEND CODE', { exact: true }).click();
+  await expect(text(page, 'Check your email')).toBeVisible({ timeout: 30_000 });
+  await expect.poll(() => codesFor(USER.email).length, { timeout: 15_000 }).toBeGreaterThan(0);
+  const code = codesFor(USER.email).pop()!.match(/(\d{6}) is your/)![1];
+  await page.getByLabel('Sign-in code').fill(code === '000000' ? '111111' : '000000');   // a wrong code is refused
+  await expect(text(page, 'That code is invalid or has expired.')).toBeVisible({ timeout: 15_000 });
+  await page.getByLabel('Sign-in code').fill(code);                                    // six digits submit on their own
+  await expect(text(page, /^Welcome, E2E$/)).toBeVisible({ timeout: 15_000 });         // the sign-in transition
+  await expect(text(page, 'FLOOD INTELLIGENCE')).toBeVisible({ timeout: 60_000 });
+  await logoutFromAccount(page);
+  // a volunteer asking for a code gets the same neutral answer and no email
+  const before = fs.readFileSync(LOG, 'utf8').length;
+  await page.getByRole('tab', { name: 'Email code' }).click();
+  await page.getByPlaceholder('you@example.com').fill(VOLUNTEER.email);
+  await page.getByText('SEND CODE', { exact: true }).click();
+  await expect(text(page, 'Check your email')).toBeVisible({ timeout: 30_000 });
+  await page.waitForTimeout(1500);
+  expect(fs.readFileSync(LOG, 'utf8').slice(before)).not.toContain(VOLUNTEER.email);
 });
 
 test('user map: every layer toggles, details open, evacuation route', async ({ page }) => {
@@ -58,7 +90,8 @@ test('user map: every layer toggles, details open, evacuation route', async ({ p
   await tab(page, 'Map').click();
   await expect(page.locator('.leaflet-container')).toBeVisible({ timeout: 60_000 });
   await expect(page.locator('.leaflet-tile-loaded').first()).toBeVisible({ timeout: 60_000 });
-  for (const name of ['Flood risk', 'Rainfall', 'Satellite', 'Hotspots', 'Road risk', 'Terrain']) {
+  await expect(text(page, 'MAP LAYERS')).toBeVisible();
+  for (const name of ['Flood risk', 'Rainfall', 'Satellite', 'Hotspots', 'Road risk', 'Terrain', 'Incidents', 'Hospitals', 'Shelters', 'Volunteers']) {
     const sw = page.getByRole('switch', { name, exact: true });
     const before = await sw.getAttribute('aria-checked');
     await sw.click();
@@ -72,18 +105,20 @@ test('user map: every layer toggles, details open, evacuation route', async ({ p
   // legend carries the documented items
   for (const l of ['Low risk', 'Medium risk', 'High risk', 'Critical risk', 'Satellite water change', 'Blocked Road', 'Your Location']) await expect(text(page, l)).toBeVisible();
   // tap a risk cell: details load from the backend
+  await page.locator('.leaflet-container').scrollIntoViewIfNeeded();
   const spot = await page.evaluate(() => {
     const box = document.querySelector('.leaflet-container')!.getBoundingClientRect();
     for (const p of Array.from(document.querySelectorAll('path.leaflet-interactive'))) {
       const r = p.getBoundingClientRect();
       const x = r.x + r.width / 2, y = r.y + r.height / 2;
-      if (r.width > 20 && r.height > 20 && x > box.x + 5 && x < box.right - 5 && y > box.y + 5 && y < box.bottom - 5) return { x, y };
+      // only a point where that map shape is really on top (not under the header or another overlay)
+      if (r.width > 20 && r.height > 20 && x > box.x + 5 && x < box.right - 5 && y > box.y + 5 && y < box.bottom - 5 && document.elementFromPoint(x, y) === p) return { x, y };
     }
     return null;
   });
   expect(spot, 'a visible map area to tap').not.toBeNull();
   await page.mouse.click(spot!.x, spot!.y);
-  await expect(text(page, /Flood risk estimate for this area|Heavy rainfall|Satellite-detected|Potential flood hotspot/)).toBeVisible({ timeout: 30_000 });
+  await expect(text(page, /Flood risk estimate for this area|Heavy rainfall|Satellite-detected|Potential flood hotspot|Road status|Incident report|Terrain susceptibility/)).toBeVisible({ timeout: 30_000 });
   await page.getByRole('button', { name: 'Close', exact: true }).click();                  // the details sheet closes
   await expect(page.getByText(/Flood risk estimate for this area/)).toBeHidden({ timeout: 10_000 });
   // evacuation: a designated point and a route, never called "safe"
@@ -105,7 +140,8 @@ test('user reports an incident with a real photo', async ({ page }) => {
   (await chooser).setFiles({ name: 'flood.png', mimeType: 'image/png', buffer: PNG });
   await expect(page.locator('img[src^="blob:"], img[src^="data:"]').and(page.locator(':visible')).first()).toBeVisible();   // the chosen photo's preview
   await page.getByText('SUBMIT REPORT', { exact: true }).click();
-  await expect(text(page, 'Incident Broadcast')).toBeVisible({ timeout: 60_000 });
+  await expect(text(page, 'Report submitted')).toBeVisible({ timeout: 60_000 });
+  await expect(text(page, /pending administrator review/)).toBeVisible();          // verification status from the backend
   await expect(text(page, 'Photo uploaded with your report.')).toBeVisible();
   await expect(page.locator('body')).toContainText(/one report on its own does not declare a flood/i);
 });
@@ -115,7 +151,7 @@ test('user asks for medicine and the nearby volunteer is matched', async ({ page
   await login(page, USER);
   await expect(text(page, 'CURRENT WEATHER')).toBeVisible({ timeout: 90_000 });
   await tab(page, 'Help').click();
-  await page.getByText('Medical Emergency', { exact: true }).first().click();   // matched to a Medicine volunteer by the backend
+  await page.getByText('Medicine', { exact: true }).first().click();
   await page.getByText('REQUEST ASSISTANCE', { exact: true }).click();
   await expect(text(page, VOLUNTEER.name)).toBeVisible({ timeout: 60_000 });
   await expect(text(page, /My requests/)).toBeVisible();
@@ -198,7 +234,7 @@ test('admin: review, drill, road risk, intelligence, insights, export, audit, re
   const upage = await uctx.newPage();
   await openApp(upage);
   await login(upage, USER);
-  await expect(text(upage, 'FLOOD RISK ASSESSMENT')).toBeVisible({ timeout: 90_000 });
+  await expect(text(upage, 'FLOOD INTELLIGENCE')).toBeVisible({ timeout: 90_000 });
   await expect(text(upage, 'SIMULATED DRILL: not a real warning')).toBeVisible({ timeout: 60_000 });
   await tab(upage, 'Alerts').click();
   await expect(text(upage, 'SIMULATED').first()).toBeVisible({ timeout: 30_000 });

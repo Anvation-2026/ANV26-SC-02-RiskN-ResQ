@@ -13,6 +13,7 @@ import { colors, fonts, riskSurface } from '../../theme';
 
 const PROV = { weather: 'Weather', satellite: 'Satellite', terrain: 'Terrain', water_level: 'River', climatology: 'History' };
 const PROV_COLOR = { OK: colors.LOW, STALE: colors.MEDIUM, DEGRADED: colors.MEDIUM, UNAVAILABLE: colors.HIGH, NOT_RUN: '#94A3B8' };
+export const PROV_WORD = { OK: 'ONLINE', STALE: 'STALE', DEGRADED: 'STALE', UNAVAILABLE: 'UNAVAILABLE', NOT_RUN: 'UNAVAILABLE' };
 
 export default function AdminDashboard({ navigate }) {
   const { user, logout } = useAuth();
@@ -43,7 +44,7 @@ export default function AdminDashboard({ navigate }) {
                   {(prov.data ? prov.data.providers : []).map((p) => (
                     <Pressable key={p.name} onPress={() => navigate('Intel')} accessibilityRole="button" accessibilityLabel={`${PROV[p.name] || p.name} data ${p.state.toLowerCase().replace('_', ' ')}`} style={styles.provChip}>
                       <View style={[styles.provDot, { backgroundColor: PROV_COLOR[p.state] || '#94A3B8' }]} />
-                      <Text style={styles.provText}>{PROV[p.name] || p.name}</Text>
+                      <Text style={styles.provText}>{PROV[p.name] || p.name} · {PROV_WORD[p.state] || p.state}</Text>
                     </Pressable>
                   ))}
                 </View>
@@ -59,6 +60,9 @@ export default function AdminDashboard({ navigate }) {
             </View>
             <View style={styles.row}>
               <MetricCard label="VOLUNTEERS AVAILABLE" value={s.available_volunteers} icon="users" color={colors.LOW} delay={300} onPress={() => navigate('People')} />
+              <MetricCard label="HIGH-RISK ZONES" value={critical == null ? '—' : critical} icon="map" color={critical ? colors.HIGH : colors.text} delay={330} onPress={() => navigate('Intel')} />
+            </View>
+            <View style={styles.row}>
               <MetricCard label="HIGHEST RAINFALL" value={rain.data && rain.data.summary ? Number(rain.data.summary.highest_rainfall_mm) : '—'} format={(n) => `${n.toFixed(1)}`} hint={rain.data && rain.data.status === 'ok' ? 'mm/h, monitored grid' : rain.data ? 'STALE or unavailable' : 'loading'} icon="cloud-rain" delay={360} onPress={() => navigate('Intel')} />
             </View>
             <Text style={styles.note}>{s.notice}</Text>

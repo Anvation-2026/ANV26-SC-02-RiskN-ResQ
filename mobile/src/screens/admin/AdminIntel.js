@@ -5,12 +5,14 @@ import { Card, ErrorText, Label, Pill, SkeletonCard, SmallButton, StateView } fr
 import { ago, RISK_COLOR } from '../../components/rain';
 import { errorText } from '../../context/AuthContext';
 import usePolling from '../../hooks/usePolling';
-import { getMlStatus, getPositioning, getProviders, getResources, getRiskHistory, refreshIntelligence } from '../../services/accountApi';
+import { getAdminSummary, getMlStatus, getPositioning, getProviders, getResources, getRiskHistory, refreshIntelligence } from '../../services/accountApi';
 import { colors, fonts } from '../../theme';
 
-const STATE = { OK: ['✓', colors.LOW, 'Updated'], STALE: ['⚠', '#B45309', 'Stale, last success'], DEGRADED: ['⚠', '#B45309', 'Partly failing, last success'],
-  UNAVAILABLE: ['✕', colors.HIGH, 'Unavailable'], NOT_RUN: ['…', colors.muted, 'Not run yet'] };
-const NAMES = { weather: 'WEATHER', satellite: 'SATELLITE', terrain: 'TERRAIN (DEM)', water_level: 'WATER LEVEL', climatology: 'RAINFALL HISTORY' };
+const STATE = { OK: ['ONLINE', colors.LOW, 'Updated'], STALE: ['STALE', '#B45309', 'Stale, last success'], DEGRADED: ['STALE', '#B45309', 'Partly failing, last success'],
+  UNAVAILABLE: ['UNAVAILABLE', colors.HIGH, 'Unavailable'], NOT_RUN: ['UNAVAILABLE', colors.muted, 'Not run yet'] };
+const NAMES = { weather: 'WEATHER', satellite: 'SATELLITE', terrain: 'TERRAIN (DEM)', water_level: 'RIVER / FLOOD MODEL', climatology: 'RAINFALL HISTORY' };
+const KIND = { weather: 'Real-time observation + forecast (Open-Meteo)', satellite: 'Periodic satellite pass (Sentinel-1 SAR, Microsoft Planetary Computer)',
+  terrain: 'Static elevation model (Copernicus DEM)', water_level: 'MODELLED river discharge (GloFAS), not a gauge', climatology: '10-year reanalysis (ERA5)' };
 const hhmm = (iso) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
 // Flood intelligence monitoring: provider freshness, high-risk zones, hotspots, risk history, volunteer positioning, resources.
@@ -20,6 +22,7 @@ export default function AdminIntel() {
   const pos = usePolling(getPositioning, 60000);
   const res = usePolling(getResources, 60000);
   const ml = usePolling(getMlStatus, 120000);
+  const sum = usePolling(getAdminSummary, 60000);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
@@ -57,9 +60,12 @@ export default function AdminIntel() {
               const [icon, color, word] = STATE[p.state] || STATE.NOT_RUN;
               return (
                 <View key={p.name} style={styles.prov}>
-                  <Text style={[styles.icon, { color }]}>{icon}</Text>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.name}>{NAMES[p.name] || p.name}</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      <Text style={styles.name}>{NAMES[p.name] || p.name}</Text>
+                      <View style={[styles.badge, { backgroundColor: color + '22', borderColor: color }]}><Text style={[styles.badgeText, { color }]}>{icon}</Text></View>
+                    </View>
+                    {KIND[p.name] ? <Text style={styles.line}>{KIND[p.name]}</Text> : null}
                     <Text style={[styles.line, { color }]}>{p.state === 'OK' || p.age_minutes != null ? `${word} ${p.age_minutes != null ? ago(p.last_success) : ''}` : word}</Text>
                     {p.detail ? <Text style={styles.line}>{p.detail}</Text> : null}
                     {p.last_error ? <Text style={[styles.line, { color: colors.HIGH }]}>Last error: {p.last_error}</Text> : null}
@@ -67,6 +73,18 @@ export default function AdminIntel() {
                 </View>
               );
             })}
+            {sum.data ? (
+              <View style={styles.prov}>
+                <View style={{ flex: 1 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <Text style={styles.name}>INCIDENTS</Text>
+                    <View style={[styles.badge, { backgroundColor: colors.LOW + '22', borderColor: colors.LOW }]}><Text style={[styles.badgeText, { color: colors.LOW }]}>ONLINE</Text></View>
+                  </View>
+                  <Text style={styles.line}>User-generated community reports (secondary evidence)</Text>
+                  <Text style={styles.line}>{sum.data.open_incidents} open report(s) in the database</Text>
+                </View>
+              </View>
+            ) : null}
             <Text style={styles.line}>
               {d.counts.monitored_cells} monitored cells · terrain {d.counts.terrain_cells} · satellite {d.counts.satellite_cells} ({d.counts.abnormal_water_cells} with abnormal water gain) · river level {d.counts.water_level_cells} · {d.counts.historical_events} historical record(s)
             </Text>
@@ -124,6 +142,8 @@ const styles = StyleSheet.create({
   body: { padding: 16, paddingBottom: 100 },
   prov: { flexDirection: 'row', gap: 10, paddingVertical: 8, borderTopWidth: 1, borderTopColor: colors.border },
   icon: { fontFamily: fonts.extrabold, fontSize: 16, width: 18 },
+  badge: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 1 },
+  badgeText: { fontFamily: fonts.extrabold, fontSize: 10, letterSpacing: 0.5 },
   name: { fontFamily: fonts.bold, fontSize: 14, color: colors.text },
   line: { fontFamily: fonts.regular, fontSize: 12, color: colors.muted, marginTop: 3, lineHeight: 17 },
   zone: { paddingVertical: 8, borderTopWidth: 1, borderTopColor: colors.border },

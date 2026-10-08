@@ -7,6 +7,9 @@ import { getToken } from './session';
 // ── auth ──
 export const apiLogin = (email, password) => http('/auth/login', { method: 'POST', body: { email, password } });
 export const apiRegister = (payload) => http('/auth/register', { method: 'POST', body: payload });
+// passwordless sign-in for user accounts: a 6-digit code is emailed (volunteers and admins use their password)
+export const requestLoginCode = (email) => http('/auth/login-code/request', { method: 'POST', body: { email } });
+export const verifyLoginCode = (email, code) => http('/auth/login-code/verify', { method: 'POST', body: { email, code } });
 export const apiMe = () => http('/auth/me');
 export const apiLogout = () => http('/auth/logout', { method: 'POST' });
 

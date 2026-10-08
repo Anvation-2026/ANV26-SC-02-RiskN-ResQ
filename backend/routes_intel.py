@@ -45,7 +45,8 @@ def _point_dict(c, lat: float, lng: float) -> Optional[dict]:
     return {"latitude": lat, "longitude": lng, "cell": a["cell"], "risk_score": a["risk_score"], "risk_level": a["risk_level"], "probability": a["probability"],
             "probability_basis": a["probability_basis"], "insufficient": a["insufficient"], "reason": INSUFFICIENT if a["insufficient"] else a["reason"],
             "explanation": a["explanation"], "signals": a["signals"], "missing": a["missing"], "sources": a["sources"], "model": a["model"],
-            "recommended_action": a["recommended_action"], "computed_at": a["computed_at"], "weather_stale": a.get("weather_stale", False)}
+            "recommended_action": a["recommended_action"], "computed_at": a["computed_at"], "weather_stale": a.get("weather_stale", False),
+            "confidence": a.get("confidence"), "confidence_basis": a.get("confidence_basis"), "features": a.get("features") or {}}
 
 
 @router.get("/flood-risk")
@@ -68,7 +69,7 @@ def flood_risk_cells():
         env = flood_intel.grid_cells(c)
         dlat, dlng = flood_intel.grid_steps(env) if env else (config.GRID_SPACING, config.GRID_SPACING)
         preds = {p["cell"]: p for p in c.execute("SELECT * FROM flood_risk_predictions").fetchall()}
-        terr = {t["cell"]: t for t in c.execute("SELECT cell, elevation_m, susceptibility FROM terrain_data").fetchall()}
+        terr = {t["cell"]: t for t in c.execute("SELECT cell, elevation_m, slope_deg, susceptibility, source, fetched_at FROM terrain_data").fetchall()}
         cells = []
         for e in env:
             p = preds.get(e["zone"])
@@ -79,7 +80,9 @@ def flood_risk_cells():
                           "top_signals": [s["label"] for s in sorted(sigs, key=lambda s: -s["points"]) if s["points"] > 0][:3],
                           "computed_at": p["computed_at"] if p else None,
                           "susceptibility": terr[e["zone"]]["susceptibility"] if e["zone"] in terr else None,
-                          "elevation_m": terr[e["zone"]]["elevation_m"] if e["zone"] in terr else None})
+                          "elevation_m": terr[e["zone"]]["elevation_m"] if e["zone"] in terr else None,
+                          "slope_deg": terr[e["zone"]]["slope_deg"] if e["zone"] in terr else None,
+                          "terrain_source": terr[e["zone"]]["source"] if e["zone"] in terr else None})
     return {"cell_size_km": {"lat": round(dlat * 111.32, 1), "lng": round(dlng * 111.32, 1)}, "half_deg": {"lat": dlat / 2, "lng": dlng / 2},
             "model": flood_intel.MODEL_NAME, "cells": cells}
 
@@ -173,7 +176,8 @@ def overview(latitude: Optional[float] = Query(None, ge=-90, le=90), longitude: 
         zones = [_zone_dict(c, z) for z in ZONES]
         here = _point_dict(c, latitude, longitude) if latitude is not None and longitude is not None else None
         hotspots = [flood_intel.hotspot_out(r) for r in c.execute("SELECT * FROM flood_hotspots WHERE active=1 ORDER BY risk_score DESC").fetchall()]
-        sat = [_obs(r) for r in c.execute("SELECT cell, latitude, longitude, observed_at, expansion_area_km2, expansion_percentage, confidence, source, abnormal "
+        sat = [_obs(r) for r in c.execute("SELECT cell, latitude, longitude, observed_at, expansion_area_km2, expansion_percentage, confidence, source, abnormal, "
+                                           "water_area_km2, baseline_water_area_km2, baseline_scenes, method "
                                            "FROM satellite_observations WHERE abnormal=1").fetchall()]
         roads = [r for r in road_risk.assess_roads(c) if r["state"] != "OPEN"]
         history = None

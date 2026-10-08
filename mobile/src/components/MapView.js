@@ -18,8 +18,6 @@ import { colors, radius, riskColor, shadow } from '../theme';
 import { useT } from '../i18n';
 import { cellCorners, drawableCells, drawableRain, RAIN_COLOR, RAIN_FILL, RAIN_RADIUS_KM, RISK_COLOR, RISK_FILL, SAT_COLOR, TERRAIN_COLOR } from './rain';
 
-const ZONE_RADIUS_KM = { LOW: 0, MODERATE: 0.7, HIGH: 1.2, CRITICAL: 1.8 };
-
 export function MapLegend({ items }) {
   const t = useT();
   const defaultItems = [
@@ -31,8 +29,11 @@ export function MapLegend({ items }) {
     { label: t('legend.rain'), color: '#38BDF8', type: 'dot' },
     { label: t('legend.satellite'), color: SAT_COLOR, type: 'dot' },
     { label: t('legend.hotspot'), color: '#B91C1C', type: 'dot' },
+    { label: t('legend.verifiedBlocked'), color: '#B91C1C', type: 'line' },
     { label: t('legend.blocked'), color: colors.HIGH, type: 'dashed' },
+    { label: t('legend.terrain'), color: TERRAIN_COLOR, type: 'dot' },
     { label: t('legend.incident'), color: '#D97706', type: 'dot' },
+    { label: t('legend.verifiedIncident'), color: '#B91C1C', type: 'dot' },
     { label: t('legend.route'), color: colors.route, type: 'line' },
     { label: t('legend.places'), color: '#0F766E', type: 'dot' },
     { label: t('legend.potential'), color: '#F97316', type: 'line' },
@@ -174,6 +175,9 @@ export default function MapView({
   terrainCells = [],
   cellHalf,
   onIntelPress,
+  onRoadPress,
+  onIncidentPress,
+  onMarkerPress,
 }) {
   const mapRef = useRef(null);
   const userCoord = useMemo(() => normalizeCoord(user), [user]);
@@ -207,13 +211,9 @@ export default function MapView({
         })
         .filter(Boolean);
     }
-    // Only generate zone if risk level is elevated and user location exists
-    if (userCoord && (level === 'HIGH' || level === 'CRITICAL')) {
-      const radiusKm = ZONE_RADIUS_KM[level] || 1.0;
-      return [{ latitude: userCoord.latitude, longitude: userCoord.longitude, radiusKm, level }];
-    }
+    // never draw an invented zone around the user: flood risk is shown by the backend's risk cells
     return [];
-  }, [zones, level, userCoord]);
+  }, [zones]);
 
   const blockedIds = useMemo(() => new Set((blocked || []).map((r) => r && r.id).filter(Boolean)), [blocked]);
   const altId = alternative && alternative.road ? alternative.road.id : null;
@@ -288,6 +288,9 @@ export default function MapView({
           status: road.status || 'OPEN',
           lowLying: !!road.low_lying,
           potential: road.risk_state === 'POTENTIALLY_AFFECTED',
+          verified: road.risk_state === 'VERIFIED_BLOCKED' || road.status === 'BLOCKED',
+          reported: road.risk_state === 'REPORTED_BLOCKED',
+          raw: road,
           pts,
           midCoord: pts[midIdx],
         };
@@ -365,7 +368,8 @@ export default function MapView({
         {/* 0. FLOOD INTELLIGENCE LAYERS: terrain susceptibility, risk cells, satellite water change, hotspots */}
         {cellHalf && (Array.isArray(terrainCells) ? terrainCells : []).map((cell) => (
           <RNPolygon key={`terrain-${cell.cell}`} coordinates={cellCorners(cell, cellHalf).map(([latitude, longitude]) => ({ latitude, longitude }))}
-            fillColor={`${TERRAIN_COLOR}24`} strokeWidth={0} zIndex={0} />
+            fillColor={`${TERRAIN_COLOR}29`} strokeColor={TERRAIN_COLOR} strokeWidth={1} lineDashPattern={[2, 4]} zIndex={0} tappable
+            onPress={() => onIntelPress && onIntelPress({ kind: 'terrain', cell })} />
         ))}
         {cellHalf && drawableCells(riskCells).map((cell) => (
           <RNPolygon key={`risk-${cell.cell}`} coordinates={cellCorners(cell, cellHalf).map(([latitude, longitude]) => ({ latitude, longitude }))}
@@ -412,18 +416,22 @@ export default function MapView({
 
         {/* 2. ROAD NETWORK POLYLINES */}
         {validRoads.map((road) => {
-          const isBlocked = blockedIds.has(road.id) || road.status === 'BLOCKED';
+          // backend road states: VERIFIED BLOCKED solid dark red, REPORTED BLOCKED dashed red, POTENTIALLY AFFECTED dashed orange
+          const isBlocked = road.verified || road.reported || blockedIds.has(road.id);
           const isLiveAlternative = !activeRouteCoords && altId === road.id;
+          const press = () => onRoadPress && onRoadPress(road.raw);
 
           if (isBlocked) {
             return (
               <RNPolyline
                 key={`road-${road.id}`}
                 coordinates={road.pts}
-                strokeColor="#DC2626"
+                strokeColor={road.verified ? '#B91C1C' : '#DC2626'}
                 strokeWidth={5}
-                lineDashPattern={[8, 5]}
+                lineDashPattern={road.verified ? undefined : [8, 5]}
                 zIndex={4}
+                tappable
+                onPress={press}
               />
             );
           }
@@ -455,6 +463,8 @@ export default function MapView({
               strokeWidth={road.potential || road.lowLying ? 4.5 : 3.5}
               lineDashPattern={road.potential ? [6, 6] : undefined}
               zIndex={2}
+              tappable
+              onPress={press}
             />
           );
         })}
@@ -479,16 +489,17 @@ export default function MapView({
 
         {/* 4. BLOCKED ROAD BADGE MARKERS */}
         {validRoads
-          .filter((r) => (blockedIds.has(r.id) || r.status === 'BLOCKED') && r.midCoord)
+          .filter((r) => (r.verified || r.reported || blockedIds.has(r.id)) && r.midCoord)
           .map((road) => (
             <RNMarker
               key={`blocked-marker-${road.id}`}
               coordinate={road.midCoord}
               anchor={{ x: 0.5, y: 0.5 }}
               zIndex={15}
+              onPress={() => onRoadPress && onRoadPress(road.raw)}
             >
-              <View style={styles.blockedBadge}>
-                <Text style={styles.blockedBadgeText}>BLOCKED</Text>
+              <View style={[styles.blockedBadge, road.verified && { backgroundColor: '#7F1D1D' }]}>
+                <Text style={styles.blockedBadgeText}>{road.verified ? 'VERIFIED BLOCKED' : 'REPORTED BLOCKED'}</Text>
               </View>
             </RNMarker>
           ))}
@@ -534,6 +545,7 @@ export default function MapView({
               coordinate={{ latitude: m.latitude, longitude: m.longitude }}
               anchor={{ x: 0.5, y: 0.5 }}
               zIndex={isDest ? 14 : m.highlight ? 18 : 12}
+              onPress={() => onMarkerPress && onMarkerPress(m)}
             >
               <View style={[styles.customPin, m.highlight && styles.highlightedPin]}>
                 <View style={[styles.pinBadge, { backgroundColor: m.color || colors.navy }]}>
@@ -553,8 +565,9 @@ export default function MapView({
             coordinate={{ latitude: inc.latitude, longitude: inc.longitude }}
             anchor={{ x: 0.5, y: 0.5 }}
             zIndex={10}
+            onPress={() => onIncidentPress && onIncidentPress(inc)}
           >
-            <View style={styles.incidentPin}>
+            <View style={[styles.incidentPin, inc.status === 'VERIFIED' && { backgroundColor: '#B91C1C' }]}>
               <Feather name="alert-triangle" size={11} color="#FFFFFF" />
             </View>
           </RNMarker>
