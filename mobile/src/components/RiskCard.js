@@ -7,27 +7,116 @@ export default function RiskCard({ risk }) {
     return (
       <View style={[styles.card, { backgroundColor: '#475569' }]}>
         <Text style={styles.kicker}>FLOOD RISK</Text>
-        <Text style={styles.loading}>Loading risk...</Text>
+        <Text style={styles.loading}>Evaluating risk telemetry...</Text>
       </View>
     );
   }
+
   const pct = Math.max(0, Math.min(100, risk.score));
+  const cardBg = riskColor(risk.level);
+
   return (
-    <View style={[styles.card, { backgroundColor: riskColor(risk.level) }]}>
-      <Text style={styles.kicker}>FLOOD RISK</Text>
-      <Text style={styles.level} adjustsFontSizeToFit numberOfLines={1}>{risk.level}</Text>
-      <Text style={styles.score}>{risk.score} / 100</Text>
-      <View style={styles.track}><View style={[styles.fill, { width: `${pct}%` }]} /></View>
+    <View style={[styles.card, { backgroundColor: cardBg }]}>
+      <View style={styles.topRow}>
+        <View style={styles.badge}>
+          <Text style={styles.kicker}>FLOOD RISK ASSESSMENT</Text>
+        </View>
+        <View style={styles.scorePill}>
+          <Text style={styles.score}>{risk.score} / 100</Text>
+        </View>
+      </View>
+
+      <View style={styles.middleRow}>
+        <Text style={styles.level} numberOfLines={1}>{risk.level}</Text>
+        <Text style={styles.subtext}>
+          {risk.level === 'CRITICAL' || risk.level === 'HIGH'
+            ? 'Severe flooding & road blockages reported'
+            : risk.level === 'MEDIUM' || risk.level === 'MODERATE'
+            ? 'Waterlogging monitored along corridors'
+            : 'Normal transit & drainage conditions'}
+        </Text>
+      </View>
+
+      <View style={styles.track}>
+        <View style={[styles.fill, { width: `${pct}%` }]} />
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  card: { borderRadius: radius.card + 4, padding: 22, alignItems: 'center', boxShadow: '0 10px 24px rgba(15,23,42,0.22)' },
-  kicker: { color: 'rgba(255,255,255,0.85)', fontSize: 13, fontFamily: 'PlusJakartaSans_800ExtraBold', letterSpacing: 2 },
-  level: { color: '#fff', fontSize: 56, fontFamily: 'PlusJakartaSans_800ExtraBold', marginVertical: 2 },
-  loading: { color: '#fff', fontSize: 22, fontFamily: 'PlusJakartaSans_700Bold', marginVertical: 18 },
-  score: { color: '#fff', fontSize: 20, fontFamily: 'PlusJakartaSans_700Bold', marginBottom: 14 },
-  track: { height: 8, alignSelf: 'stretch', backgroundColor: 'rgba(255,255,255,0.3)', borderRadius: 4, overflow: 'hidden' },
-  fill: { height: 8, backgroundColor: '#fff', borderRadius: 4 },
+  card: {
+    borderRadius: radius.card,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.16,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  topRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  badge: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  kicker: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontFamily: 'PlusJakartaSans_800ExtraBold',
+    letterSpacing: 0.8,
+  },
+  scorePill: {
+    backgroundColor: 'rgba(0, 0, 0, 0.25)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  score: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontFamily: 'PlusJakartaSans_800ExtraBold',
+    letterSpacing: 0.5,
+  },
+  middleRow: {
+    marginVertical: 4,
+  },
+  level: {
+    color: '#FFFFFF',
+    fontSize: 26,
+    fontFamily: 'PlusJakartaSans_800ExtraBold',
+    letterSpacing: -0.5,
+  },
+  subtext: {
+    color: 'rgba(255, 255, 255, 0.9)',
+    fontSize: 12,
+    fontFamily: 'PlusJakartaSans_500Medium',
+    marginTop: 2,
+    marginBottom: 8,
+  },
+  loading: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontFamily: 'PlusJakartaSans_700Bold',
+    marginVertical: 10,
+  },
+  track: {
+    height: 5,
+    alignSelf: 'stretch',
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  fill: {
+    height: 5,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 3,
+  },
 });

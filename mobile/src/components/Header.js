@@ -1,25 +1,57 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { colors, topInset } from '../theme';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { colors } from '../theme';
 
 export default function Header({ title, subtitle, right, children }) {
+  const insets = useSafeAreaInsets();
+  const paddingTop = Math.max(insets.top, 40) + 6;
+
   return (
-    <View style={styles.wrap}>
+    <View style={[styles.wrap, { paddingTop }]}>
       <View style={styles.row}>
         <View style={{ flex: 1 }}>
           <Text style={styles.title}>{title}</Text>
-          {subtitle ? <Text style={styles.sub}>{subtitle}</Text> : null}
+          {subtitle ? <Text style={styles.sub} numberOfLines={1}>{subtitle}</Text> : null}
         </View>
         {right}
       </View>
-      {children}
+      {children ? <View style={styles.childContainer}>{children}</View> : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  wrap: { backgroundColor: colors.navy, paddingTop: topInset, paddingHorizontal: 20, paddingBottom: 22, borderBottomLeftRadius: 28, borderBottomRightRadius: 28 },
-  row: { flexDirection: 'row', alignItems: 'center' },
-  title: { color: '#fff', fontSize: 24, fontFamily: 'PlusJakartaSans_800ExtraBold' },
-  sub: { color: '#B6C4DB', fontFamily: 'PlusJakartaSans_400Regular', fontSize: 14, marginTop: 2 },
+  wrap: {
+    backgroundColor: colors.navy,
+    paddingHorizontal: 18,
+    paddingBottom: 14,
+    borderBottomLeftRadius: 20,
+    borderBottomRightRadius: 20,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  title: {
+    color: '#FFFFFF',
+    fontSize: 22,
+    fontFamily: 'PlusJakartaSans_800ExtraBold',
+    letterSpacing: -0.2,
+  },
+  sub: {
+    color: '#94A3B8',
+    fontFamily: 'PlusJakartaSans_500Medium',
+    fontSize: 12,
+    marginTop: 2,
+  },
+  childContainer: {
+    marginTop: 8,
+  },
 });

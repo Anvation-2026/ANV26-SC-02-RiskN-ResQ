@@ -1,30 +1,36 @@
 import { Platform, StatusBar } from 'react-native';
 
 export const colors = {
-  navy: '#0B1F3A',
-  navy2: '#13305A',
-  bg: '#F3F5F9',
+  navy: '#0B1F33',
+  navy2: '#132E4A',
+  bg: '#F8FAFC',
   card: '#FFFFFF',
   text: '#0F172A',
   muted: '#64748B',
   border: '#E2E8F0',
-  primary: '#1A73E8',
-  route: '#1A73E8',
+  primary: '#1565FF',
+  route: '#1565FF',
   LOW: '#16A34A',
   MEDIUM: '#F59E0B',
   MODERATE: '#F59E0B',
   HIGH: '#DC2626',
-  CRITICAL: '#7F1D1D',
+  CRITICAL: '#DC2626',
 };
 
 export const riskColor = (level) => colors[level] || colors.LOW;
 
-export const radius = { card: 20, button: 14, pill: 999 };
-export const shadow = { boxShadow: '0 4px 14px rgba(15,23,42,0.08)' };
+export const radius = { card: 18, button: 14, pill: 999 };
+export const shadow = {
+  shadowColor: '#0F172A',
+  shadowOffset: { width: 0, height: 2 },
+  shadowOpacity: 0.06,
+  shadowRadius: 8,
+  elevation: 2,
+};
 
 export const topInset = Platform.select({
-  ios: 56,
-  android: (StatusBar.currentHeight || 24) + 8,
+  ios: 48,
+  android: (StatusBar.currentHeight || 24) + 6,
   default: 20,
 });
 
