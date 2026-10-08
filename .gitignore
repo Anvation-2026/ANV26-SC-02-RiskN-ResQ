@@ -7,3 +7,6 @@ __pycache__/
 *.db
 .venv/
 .DS_Store
+.env
+.env.*
+.pytest_cache/

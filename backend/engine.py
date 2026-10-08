@@ -2,7 +2,9 @@
 import math
 from datetime import datetime, timezone
 
-from db import now
+import json
+
+from db import ZONES, nearest_zone, now
 
 # ---------- Trust score ----------
 
@@ -54,8 +56,9 @@ def rain_score(r: float) -> float:
 
 
 def compute_risk(c, zone: str) -> dict:
-    env = c.execute("SELECT rainfall FROM environment_data WHERE zone=?", (zone,)).fetchone()
+    env = c.execute("SELECT rainfall, data_source FROM environment_data WHERE zone=?", (zone,)).fetchone()
     rainfall = env["rainfall"] if env else 0
+    data_source = env["data_source"] if env else "DEMO_SEED"
     score = rain_score(rainfall)
     reasons = [f"{'Heavy' if rainfall >= 60 else 'Moderate' if rainfall >= 20 else 'Light'} rainfall ({rainfall:g} mm)"]
 
@@ -81,25 +84,45 @@ def compute_risk(c, zone: str) -> dict:
 
     score = round(score)
     return {"location": zone, "risk_score": score, "risk_level": level_for(score),
-            "rainfall": rainfall, "reason": " + ".join(reasons)}
+            "rainfall": rainfall, "reason": " + ".join(reasons),
+            "blocked_roads": blocked_roads(c, zone),
+            "data_source": data_source}  # SIMULATED / DEMO_SEED: never a live real-world reading
+
+
+def blocked_roads(c, zone: str) -> list:
+    """Names of BLOCKED roads whose start point lies in this zone."""
+    out = []
+    for r in c.execute("SELECT name, coordinates FROM roads WHERE status='BLOCKED' ORDER BY id"):
+        first = json.loads(r["coordinates"])[0]
+        if nearest_zone(first[0], first[1]) == zone:
+            out.append(r["name"])
+    return out
 
 
 # ---------- Alert engine ----------
 
 def sync_alert(c, risk: dict):
-    """Create/update an active alert for HIGH/CRITICAL, resolve it otherwise. Returns alert row or None."""
+    """One ENGINE alert per zone: create/upgrade at HIGH or CRITICAL, deactivate when risk drops.
+    Manual alerts (source='MANUAL') are never touched. Returns the alert row or None."""
     zone, level = risk["location"], risk["risk_level"]
-    active = c.execute("SELECT * FROM alerts WHERE affected_zone=? AND active=1", (zone,)).fetchone()
+    active = c.execute("SELECT * FROM alerts WHERE affected_zone=? AND active=1 AND source='ENGINE'", (zone,)).fetchone()
     if level in ("HIGH", "CRITICAL"):
-        msg = f"{level.capitalize()} flood risk detected in your area ({zone}). {risk['reason']}."
+        roads = ", ".join(risk["blocked_roads"]) or None
+        msg = f"{level.capitalize()} flood risk detected in {zone}. {risk['reason']}."
+        if roads:
+            msg += f" Reported blocked: {roads}."
         if active:
-            c.execute("UPDATE alerts SET severity=?, message=? WHERE id=?", (level, msg, active["id"]))
+            changed = (active["severity"], active["message"], active["risk_score"]) != (level, msg, risk["risk_score"])
+            if changed:
+                c.execute("UPDATE alerts SET severity=?, message=?, reason=?, affected_road=?, risk_score=?, updated_at=? WHERE id=?",
+                          (level, msg, risk["reason"], roads, risk["risk_score"], now(), active["id"]))
             return c.execute("SELECT * FROM alerts WHERE id=?", (active["id"],)).fetchone()
-        cur = c.execute("INSERT INTO alerts(severity,message,affected_zone,active,created_at) VALUES(?,?,?,1,?)",
-                        (level, msg, zone, now()))
+        t = now()
+        cur = c.execute("INSERT INTO alerts(severity,message,affected_zone,active,created_at,reason,affected_road,risk_score,source,updated_at)"
+                        " VALUES(?,?,?,1,?,?,?,?,'ENGINE',?)", (level, msg, zone, t, risk["reason"], roads, risk["risk_score"], t))
         return c.execute("SELECT * FROM alerts WHERE id=?", (cur.lastrowid,)).fetchone()
     if active:
-        c.execute("UPDATE alerts SET active=0 WHERE id=?", (active["id"],))
+        c.execute("UPDATE alerts SET active=0, updated_at=? WHERE id=?", (now(), active["id"]))
     return None
 
 
@@ -107,3 +130,7 @@ def refresh_zone(c, zone: str) -> dict:
     risk = compute_risk(c, zone)
     sync_alert(c, risk)
     return risk
+
+
+def refresh_all(c) -> list:
+    return [refresh_zone(c, z) for z in ZONES]
