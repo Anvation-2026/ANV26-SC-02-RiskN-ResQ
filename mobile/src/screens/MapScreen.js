@@ -16,6 +16,7 @@ import ResponsePanel from '../components/ResponsePanel';
 import ErrorBoundary from '../components/ErrorBoundary';
 import { useResponse } from '../context/ResponseContext';
 import { useData } from '../context/DataContext';
+import { RAIN_LABEL } from '../components/rain';
 import { ROUTE_NOTE } from '../services/copy';
 import { colors, radius, shadow } from '../theme';
 
@@ -27,7 +28,8 @@ const MODES = [
 export default function MapScreen() {
   const insets = useSafeAreaInsets();
   const { height: screenHeight } = useWindowDimensions();
-  const { userLocation, risk, blocked, roads, alternative, incidents, locationLabel } = useData();
+  const { userLocation, risk, blocked, roads, alternative, incidents, locationLabel, weatherMonitor } = useData();
+  const [rainPick, setRainPick] = useState(null);
   const [mode, setMode] = useState('live');
   const R = useResponse();
 
@@ -132,12 +134,33 @@ export default function MapScreen() {
               markers={scenario.markers}
               user={userLocation || R?.userLocation}
               labelBlockedOnly
+              rainAreas={weatherMonitor ? weatherMonitor.locations : []}
+              onRainPress={setRainPick}
             />
           </View>
         </ErrorBoundary>
 
-        {/* COMPACT MAP LEGEND */}
+
         <MapLegend />
+
+        {rainPick && (
+          <View style={styles.rainCard}>
+            <View style={styles.kickerRow}>
+              <Text style={styles.rainTitle}>{RAIN_LABEL[rainPick.rain_level]}</Text>
+              <Pressable onPress={() => setRainPick(null)} hitSlop={10}><Feather name="x" size={16} color={colors.muted} /></Pressable>
+            </View>
+            <Text style={styles.rainLine}>Rainfall: <Text style={styles.rainBold}>{rainPick.rainfall_mm.toFixed(1)} mm</Text></Text>
+            <Text style={styles.rainLine}>Period: <Text style={styles.rainBold}>1 hour</Text> ({(rainPick.rainfall_24h_mm ?? 0).toFixed(1)} mm in 24 h)</Text>
+            <Text style={styles.rainLine}>Location: <Text style={styles.rainBold}>{rainPick.latitude.toFixed(3)}, {rainPick.longitude.toFixed(3)}</Text></Text>
+            <Text style={styles.rainLine}>Observed: <Text style={styles.rainBold}>{new Date(rainPick.timestamp).toLocaleString()}</Text></Text>
+            <Text style={styles.rainLine}>Source: <Text style={styles.rainBold}>{rainPick.source}</Text></Text>
+            <Text style={styles.rainLine}>Status: <Text style={styles.rainBold}>{RAIN_LABEL[rainPick.rain_level].toUpperCase()}</Text></Text>
+            <Text style={styles.rainNote}>This is a rainfall reading. Flood risk is shown separately by the risk level and alerts.</Text>
+          </View>
+        )}
+        {weatherMonitor && weatherMonitor.status !== 'ok' && (
+          <Text style={styles.rainStale}>{weatherMonitor.message || 'Weather data unavailable'}</Text>
+        )}
 
         {/* BOTTOM SECTION / ROUTE STATUS */}
         {mode === 'response' ? (
@@ -218,6 +241,12 @@ export default function MapScreen() {
 }
 
 const styles = StyleSheet.create({
+  rainCard: { backgroundColor: '#fff', borderRadius: 16, padding: 14, marginTop: 12, borderWidth: 1, borderColor: '#FED7AA' },
+  rainTitle: { fontFamily: 'PlusJakartaSans_800ExtraBold', fontSize: 15, color: colors.text },
+  rainLine: { fontFamily: 'PlusJakartaSans_500Medium', fontSize: 13, color: colors.text, marginTop: 3 },
+  rainBold: { fontFamily: 'PlusJakartaSans_700Bold' },
+  rainNote: { fontFamily: 'PlusJakartaSans_500Medium', fontSize: 11, color: colors.muted, marginTop: 8 },
+  rainStale: { fontFamily: 'PlusJakartaSans_700Bold', fontSize: 12, color: '#B45309', marginTop: 8 },
   root: {
     flex: 1,
     backgroundColor: colors.bg,

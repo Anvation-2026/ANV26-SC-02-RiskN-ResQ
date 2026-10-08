@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import math
@@ -34,6 +35,7 @@ from engine import (
 )
 from providers.routing.base import RoutePoint
 from providers.routing.router import CompositeRoutingProvider
+import weather_monitor
 from providers.weather.imd import IMDProvider
 from providers.weather.open_meteo import OpenMeteoProvider
 
@@ -79,7 +81,12 @@ async def lifespan(app: FastAPI):
     db.init_db(reset=False)
     auth.ensure_admin()
     logger.info("Database initialized. Ready for real telemetry.")
-    yield
+    monitor = asyncio.create_task(weather_monitor.run_forever(weather_provider)) if config.WEATHER_MONITOR_ENABLED else None
+    try:
+        yield
+    finally:
+        if monitor:
+            monitor.cancel()
 
 
 app = FastAPI(
@@ -1484,6 +1491,16 @@ def unblock_road(road_id: int, _: dict = Depends(auth.require_admin)):
 # ==========================================
 # 10. Real-Time Telemetry Bundle (/sync)
 # ==========================================
+
+@app.get("/weather/monitoring")
+async def weather_monitoring():
+    """Latest rainfall across the monitored grid, read from the backend cache (clients never call the weather API).
+    This is rainfall only: a flood risk level comes from /risk and /alerts, reports from /incidents."""
+    snap = weather_monitor.status()
+    if snap["status"] == "unavailable" and not weather_monitor._state["refreshing"] and weather_monitor._state["last_attempt"] is None:
+        snap = await weather_monitor.refresh(weather_provider)  # first request before the background loop has run
+    return snap
+
 
 @app.get("/weather")
 async def get_weather(latitude: float = Query(..., ge=-90.0, le=90.0), longitude: float = Query(..., ge=-180.0, le=180.0)):

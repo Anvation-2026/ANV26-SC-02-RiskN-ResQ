@@ -72,3 +72,37 @@ class OpenMeteoProvider(WeatherProvider):
             warning_level=warning_level,
             observed_at=obs_iso,
         )
+
+    async def get_weather_grid(self, points: list) -> list:
+        """One request per chunk of points (Open-Meteo accepts comma-separated coordinates), not one per point."""
+        out = []
+        for i in range(0, len(points), 50):
+            chunk = points[i:i + 50]
+            url = (
+                "https://api.open-meteo.com/v1/forecast"
+                f"?latitude={','.join(str(la) for la, _ in chunk)}&longitude={','.join(str(lo) for _, lo in chunk)}"
+                "&current=precipitation,weather_code&hourly=precipitation&past_hours=24&forecast_hours=1"
+            )
+            async with httpx.AsyncClient(timeout=max(self.timeout, 15.0)) as client:
+                resp = await client.get(url)
+                resp.raise_for_status()
+                data = resp.json()
+            if isinstance(data, dict):  # a single point comes back as an object, several as a list
+                data = [data]
+            if len(data) != len(chunk):
+                raise ValueError("Open-Meteo returned an unexpected number of locations")
+            for (la, lo), item in zip(chunk, data):
+                curr = item.get("current") or {}
+                hourly = (item.get("hourly") or {}).get("precipitation") or []
+                obs_time = curr.get("time")
+                try:
+                    observed = datetime.fromisoformat(obs_time).replace(tzinfo=timezone.utc).isoformat()
+                except Exception:
+                    observed = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                out.append(WeatherObservation(
+                    source=self.get_source_name(), station=f"grid {la:.2f},{lo:.2f}", latitude=la, longitude=lo,
+                    rainfall_24h_mm=round(sum(float(v or 0.0) for v in hourly[:24]), 2),
+                    rainfall_intensity_mm_per_hour=float(curr.get("precipitation") or 0.0),
+                    observed_at=observed, weather_code=curr.get("weather_code"),
+                ))
+        return out

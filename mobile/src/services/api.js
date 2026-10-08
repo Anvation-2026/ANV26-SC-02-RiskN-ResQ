@@ -203,6 +203,11 @@ export async function requestHelp({ type, priority = 'HIGH', latitude, longitude
 }
 
 // ── Admin-managed state shown to every user (public read endpoints) ──────────
+// Rainfall across the monitored grid, served from the backend cache (the phone never calls the weather API).
+export async function getWeatherMonitoring() {
+  return http('/weather/monitoring');
+}
+
 export async function getZoneAlerts() {
   const raw = await http('/alerts?active_only=true');
   return raw.filter((a) => a.active !== false);

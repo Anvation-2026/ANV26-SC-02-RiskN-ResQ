@@ -285,3 +285,17 @@ mobile/
 ## Out of scope for the MVP
 
 Login, user profiles, chat, payments, other disaster types, machine learning, an admin dashboard, and real photo upload (the photo button is visual only).
+
+
+## Weather monitoring (heavy-rainfall areas)
+
+The backend polls Open-Meteo for a grid of points covering `MONITORING_BOUNDS` (default Bengaluru, 5 x 5 = 25 points) in one
+batched request every `WEATHER_REFRESH_INTERVAL` seconds (default 900) and keeps the latest reading per grid cell in
+`environment_data` (one row per cell, updated in place, previous reading kept). Phones never call the weather API: they read
+`GET /weather/monitoring`, which returns the cached cells, a summary and a status (`ok`, `stale` after 3 missed intervals, or
+`unavailable`). Rain-rate classes (mm/h) are configurable: `RAIN_MODERATE_THRESHOLD`, `HEAVY_RAIN_THRESHOLD`,
+`RAIN_VERY_HEAVY_THRESHOLD`. The map draws only moderate-and-above areas as translucent circles; tapping one shows the reading.
+
+Heavy rainfall is a weather observation, not a flood. After each refresh every risk zone takes the real 24 h rainfall of its
+nearest cell and the existing risk engine re-scores it and raises or clears its alert. Zones under an admin drill (SIMULATED)
+are not overwritten until the admin resets. If the provider fails, the last data is kept and labelled stale; nothing is invented.

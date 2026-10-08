@@ -8,6 +8,8 @@ import { errorText } from '../../context/AuthContext';
 import { useData } from '../../context/DataContext';
 import usePolling from '../../hooks/usePolling';
 import { getActiveAlerts, getAllRoads, resetDemo, setRoad, simulateRain } from '../../services/accountApi';
+import WeatherCard from '../../components/WeatherCard';
+import { getWeatherMonitoring } from '../../services/api';
 import { colors, fonts, riskColor } from '../../theme';
 
 const PRESETS = [['Normal', 5, colors.LOW], ['Heavy rain', 80, colors.MEDIUM], ['Extreme', 120, colors.HIGH]];
@@ -16,6 +18,7 @@ export default function AdminControl() {
   const { refresh } = useData();
   const roads = usePolling(getAllRoads, 5000);
   const alerts = usePolling(getActiveAlerts, 5000);
+  const weather = usePolling(getWeatherMonitoring, 60000); // the backend cache, so this is cheap
   const [rain, setRain] = useState('80');
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
@@ -48,6 +51,8 @@ export default function AdminControl() {
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
         <ErrorText>{error || roads.error}</ErrorText>
+
+        <WeatherCard admin monitor={weather.data} />
 
         <Card>
           <View style={styles.titleRow}><Image source={symbols.rain} style={styles.sym} /><Text style={styles.title}>Simulate hazard (flood)</Text></View>

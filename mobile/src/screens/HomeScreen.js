@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Feather from '@expo/vector-icons/Feather';
+import WeatherCard from '../components/WeatherCard';
 import Header from '../components/Header';
 import RiskCard from '../components/RiskCard';
 import AlertCard from '../components/AlertCard';
@@ -34,6 +35,7 @@ export default function HomeScreen({ navigate }) {
     locationStatus,
     risk,
     weather,
+    weatherMonitor,
     incidents,
     alerts,
     blocked,
@@ -102,6 +104,9 @@ export default function HomeScreen({ navigate }) {
             </Pressable>
           </View>
         )}
+
+        {/* 1b. WEATHER (rainfall only; flood risk is the separate card below) */}
+        <WeatherCard monitor={weatherMonitor} at={userLocation} />
 
         {/* 2. REAL MULTI-FACTOR FLOOD RISK CARD */}
         <RiskCard

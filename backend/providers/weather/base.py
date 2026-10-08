@@ -14,6 +14,7 @@ class WeatherObservation(BaseModel):
     humidity: Optional[float] = None
     warning_level: str = Field("NONE", description="Official or threshold-derived warning: NONE, YELLOW, ORANGE, RED")
     observed_at: str
+    weather_code: Optional[int] = Field(None, description="WMO weather code when the provider supplies one")
 
 
 class WeatherProvider(ABC):
@@ -26,3 +27,8 @@ class WeatherProvider(ABC):
     def get_source_name(self) -> str:
         """Return the source name of this provider."""
         pass
+
+
+    async def get_weather_grid(self, points: list) -> list:
+        """Observations for many (lat, lng) points. Providers with a bulk API override this; the default asks one by one."""
+        return [await self.get_weather(la, lo) for la, lo in points]

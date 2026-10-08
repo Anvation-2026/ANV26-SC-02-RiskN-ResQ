@@ -8,6 +8,8 @@ import uuid
 
 import pytest
 
+os.environ.setdefault("WEATHER_MONITOR_ENABLED", "0")  # no background polling of the real weather API in tests
+
 import db
 
 USE_POSTGRES = os.environ.get("RISKNRESQ_TEST_BACKEND") == "postgres"

@@ -14,16 +14,18 @@ import RNMapView, {
 } from 'react-native-maps';
 import Feather from '@expo/vector-icons/Feather';
 import { colors, radius, riskColor, shadow } from '../theme';
+import { drawableRain, RAIN_COLOR, RAIN_FILL, RAIN_RADIUS_KM } from './rain';
 
 const ZONE_RADIUS_KM = { LOW: 0, MODERATE: 0.7, HIGH: 1.2, CRITICAL: 1.8 };
 
 export function MapLegend({ items }) {
   const defaultItems = [
-    { label: 'Hazard Zone', color: colors.HIGH, type: 'dot' },
+    { label: 'High Risk', color: colors.HIGH, type: 'dot' },
     { label: 'Blocked Road', color: colors.HIGH, type: 'dashed' },
-    { label: 'Current Location', color: colors.primary, type: 'dot' },
+    { label: 'Your Location', color: colors.primary, type: 'dot' },
+    { label: 'Heavy Rainfall', color: '#F97316', type: 'dot' },
+    { label: 'Incident', color: '#D97706', type: 'dot' },
     { label: 'Recommended Route', color: colors.route, type: 'line' },
-    { label: 'Volunteer Responder', color: '#0F766E', type: 'dot' },
   ];
 
   const chips = useMemo(() => {
@@ -39,7 +41,8 @@ export function MapLegend({ items }) {
       }
       let type = 'dot';
       let color = colors.primary;
-      if (label.includes('Risk') || label.includes('Hazard')) { color = colors.HIGH; type = 'dot'; }
+      if (label.includes('Rain')) { color = '#F97316'; type = 'dot'; }
+      else if (label.includes('Risk') || label.includes('Hazard')) { color = colors.HIGH; type = 'dot'; }
       else if (label.includes('Blocked')) { color = colors.HIGH; type = 'dashed'; }
       else if (label.includes('Route') || label.includes('Recommended')) { color = colors.route; type = 'line'; }
       else if (label.includes('Resource') || label.includes('Volunteer')) { color = '#0F766E'; type = 'dot'; }
@@ -151,6 +154,8 @@ export default function MapView({
   markers = [],
   user,
   labelBlockedOnly = false,
+  rainAreas = [],
+  onRainPress,
 }) {
   const mapRef = useRef(null);
   const userCoord = useMemo(() => normalizeCoord(user), [user]);
@@ -336,6 +341,21 @@ export default function MapView({
             />
           );
         })}
+
+        {/* 1b. HEAVY RAINFALL AREAS (weather observations; tap for details) */}
+        {drawableRain(rainAreas).map((a) => (
+          <RNCircle
+            key={`rain-${a.latitude}-${a.longitude}`}
+            center={{ latitude: a.latitude, longitude: a.longitude }}
+            radius={RAIN_RADIUS_KM * 1000}
+            fillColor={`${RAIN_COLOR[a.rain_level]}${Math.round(RAIN_FILL[a.rain_level] * 255).toString(16).padStart(2, '0')}`}
+            strokeColor={RAIN_COLOR[a.rain_level]}
+            strokeWidth={1}
+            zIndex={0}
+            tappable
+            onPress={() => onRainPress && onRainPress(a)}
+          />
+        ))}
 
         {/* 2. ROAD NETWORK POLYLINES */}
         {validRoads.map((road) => {

@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { POLL_MS, USE_DEVICE_LOCATION } from '../config/api';
-import { getRoadStatus, getZoneAlerts, syncTelemetry } from '../services/api';
+import { getRoadStatus, getWeatherMonitoring, getZoneAlerts, syncTelemetry } from '../services/api';
 import {
   checkLocationPermission,
   requestLocationPermission,
@@ -25,6 +25,7 @@ export function DataProvider({ children }) {
   const [volunteers, setVolunteers] = useState([]);
   const [zoneAlerts, setZoneAlerts] = useState([]); // admin/engine alerts from GET /alerts
   const [roadStatus, setRoadStatus] = useState([]); // admin-managed road state from GET /roads
+  const [weatherMonitor, setWeatherMonitor] = useState(null); // rainfall grid from GET /weather/monitoring
   const [source, setSource] = useState('live');
   const [lastUpdated, setLastUpdated] = useState(null);
   const [backendError, setBackendError] = useState(null);
@@ -87,11 +88,13 @@ export function DataProvider({ children }) {
     busyRef.current = true;
 
     try {
-      const [bundle, alertsRes, roadsRes] = await Promise.all([
+      const [bundle, alertsRes, roadsRes, monitorRes] = await Promise.all([
         syncTelemetry(userLocation.latitude, userLocation.longitude),
         getZoneAlerts().catch(() => null), // a failure here must not hide the rest of the telemetry
         getRoadStatus().catch(() => null),
+        getWeatherMonitoring().catch(() => null),
       ]);
+      if (monitorRes) setWeatherMonitor(monitorRes);
       if (alertsRes) setZoneAlerts(alertsRes);
       if (roadsRes) setRoadStatus(roadsRes);
       const rawRisk = bundle.risk;
@@ -225,6 +228,7 @@ export function DataProvider({ children }) {
     risk: effectiveRisk,
     gpsRisk: risk,
     weather,
+    weatherMonitor,
     incidents,
     volunteers,
     blocked,

@@ -199,6 +199,13 @@ MIGRATIONS = {
     ],
     "environment_data": [
         ("data_source", "TEXT NOT NULL DEFAULT 'DEMO_SEED'"),
+        # weather monitoring grid cells share this table (zone = 'grid:<lat>,<lng>'): one row per cell, updated in place
+        ("rain_level", "TEXT"),
+        ("rainfall_24h", "REAL"),
+        ("prev_rainfall", "REAL"),
+        ("prev_at", "TEXT"),
+        ("observed_at", "TEXT"),
+        ("weather_code", "INTEGER"),
     ],
 }
 
