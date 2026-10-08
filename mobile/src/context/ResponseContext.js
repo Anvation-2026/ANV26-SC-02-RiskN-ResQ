@@ -1,92 +1,179 @@
-// State for the geospatial disaster-response flow (route + road state + resource matching).
-// All logic comes from src/features/disaster-response; this context only holds state.
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { USE_DEVICE_LOCATION } from '../config/api';
+import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
 import { useData } from './DataContext';
-import { syncRoadA } from '../services/api';
-import { getCurrentUserLocation, DEMO_FALLBACK_LOCATION } from '../features/disaster-response/services/geolocation';
-import { isInsideRiskZone } from '../features/disaster-response/services/geofencing';
-import { findRecommendedRoute, blockRoad, unblockRoad } from '../features/disaster-response/services/routing';
-import { findBestVolunteerMatch } from '../features/disaster-response/services/matching';
-import { INITIAL_MOCK_ROADS, INITIAL_ROAD_GRAPH } from '../features/disaster-response/data/mockRoads';
-import { MOCK_RISK_ZONES, PRIMARY_DEMO_RISK_ZONE } from '../features/disaster-response/data/mockHazards';
-import { MOCK_VOLUNTEERS } from '../features/disaster-response/data/mockVolunteers';
+import { computeRoute as apiComputeRoute, requestHelp as apiRequestHelp } from '../services/api';
 
 const ResponseContext = createContext(null);
 export const useResponse = () => useContext(ResponseContext);
 
-export const ORIGIN_NODE = 'A';
-export const DESTINATION_NODE = 'D';
-export const DEMO_ROAD_ID = 'ROAD_A';
 export const RESOURCES = ['Medicine', 'Food', 'Water', 'First Aid', 'Evacuation'];
 
 export function ResponseProvider({ children }) {
-  const { refresh, roads: backendRoads, source } = useData();
-  const [userLocation, setUserLocation] = useState(DEMO_FALLBACK_LOCATION);
-  const [roads, setRoads] = useState(INITIAL_MOCK_ROADS);
-  const [route, setRoute] = useState(null);
+  const { userLocation, risk, volunteers: liveVolunteers, blocked, refresh } = useData();
+
   const [resource, setResource] = useState('Medicine');
   const [match, setMatch] = useState(null);
+  const [route, setRoute] = useState(null);
+  const [destinationVolunteer, setDestinationVolunteer] = useState(null);
+  const [destinationLabel, setDestinationLabel] = useState('Nearest Response Hub');
+  const [isRouting, setIsRouting] = useState(false);
 
-  useEffect(() => {
-    if (USE_DEVICE_LOCATION) getCurrentUserLocation().then(setUserLocation);
-  }, []);
+  // Assess risk zone based on real environmental telemetry
+  const assessment = useMemo(() => {
+    if (!risk) {
+      return { insideRiskZone: false, riskLevel: 'LOW', distanceKm: 0 };
+    }
+    const isInside = risk.risk_level === 'HIGH' || risk.risk_level === 'CRITICAL';
+    return {
+      insideRiskZone: isInside,
+      riskLevel: risk.risk_level || 'LOW',
+      distanceKm: 0,
+      reason: risk.reason,
+    };
+  }, [risk]);
 
-  // When the backend is live, its road state is the truth: an admin blocking Road A there must show up here
-  // (and in every user's route) without anyone touching local controls.
-  useEffect(() => {
-    if (source !== 'live' || !backendRoads || !backendRoads.length) return;
-    const blockedUpstream = backendRoads[0].status === 'BLOCKED'; // backend "Road A" <-> module ROAD_A
-    setRoads((prev) => {
-      const blockedNow = prev.find((r) => r.id === DEMO_ROAD_ID)?.status === 'BLOCKED';
-      if (blockedNow === blockedUpstream) return prev;
-      return blockedUpstream ? blockRoad(DEMO_ROAD_ID, prev) : unblockRoad(DEMO_ROAD_ID, prev);
-    });
-  }, [source, backendRoads]);
+  // Request Route to target destination using backend incident-aware router
+  const requestRoute = useCallback(async (targetDest = null) => {
+    if (!userLocation) return null;
+    const dest = targetDest || (destinationVolunteer ? {
+      latitude: destinationVolunteer.latitude,
+      longitude: destinationVolunteer.longitude,
+    } : null);
 
-  const assessment = useMemo(() => isInsideRiskZone(userLocation, PRIMARY_DEMO_RISK_ZONE), [userLocation]);
+    if (!dest) {
+      // If no destination specified, route to first nearby volunteer or 1km north
+      if (liveVolunteers && liveVolunteers.length > 0) {
+        const firstVol = liveVolunteers[0];
+        return requestRoute({ latitude: firstVol.latitude, longitude: firstVol.longitude });
+      }
+      return null;
+    }
 
-  const compute = (currentRoads) => findRecommendedRoute(ORIGIN_NODE, DESTINATION_NODE, currentRoads, INITIAL_ROAD_GRAPH);
+    setIsRouting(true);
+    try {
+      const res = await apiComputeRoute(
+        { latitude: userLocation.latitude, longitude: userLocation.longitude },
+        dest
+      );
 
-  const requestRoute = useCallback(() => setRoute(compute(roads)), [roads]);
+      if (res && res.success) {
+        const transformedRoute = {
+          success: true,
+          distanceKm: res.distanceKm,
+          etaMinutes: res.etaMinutes,
+          coordinates: res.polyline || [],
+          blockedRoads: (res.avoidedIncidents || []).map((inc) => ({
+            id: String(inc.id),
+            name: inc.description || inc.type,
+          })),
+          reason: (res.avoidedIncidents || []).length > 0
+            ? 'Avoids reported blocked road'
+            : 'Optimal street network path',
+          safetyNote: res.safetyNote || 'Recommended alternative route based on available route and incident data.',
+          source: res.source,
+        };
+        setRoute(transformedRoute);
+        return transformedRoute;
+      } else {
+        const failedRoute = {
+          success: false,
+          distanceKm: 0,
+          etaMinutes: 0,
+          coordinates: [],
+          blockedRoads: [],
+          reason: res?.message || 'No traversable route found',
+          safetyNote: res?.safetyNote || 'All known corridors may be blocked by active hazards.',
+        };
+        setRoute(failedRoute);
+        return failedRoute;
+      }
+    } catch (err) {
+      console.warn('Route computation error:', err);
+      return null;
+    } finally {
+      setIsRouting(false);
+    }
+  }, [userLocation, destinationVolunteer, liveVolunteers]);
 
-  // keep an already-requested route in step with road changes (local or from the backend)
-  useEffect(() => {
-    setRoute((r) => (r ? compute(roads) : r));
-  }, [roads]);
+  // Request help & match with real volunteer responder
+  const requestResource = useCallback(async (name = resource, priority = 'HIGH') => {
+    if (!userLocation) {
+      return { matched: false, message: 'Device location required for emergency request.' };
+    }
 
-  const applyRoads = useCallback((next) => setRoads(next), []);
+    try {
+      const result = await apiRequestHelp({
+        type: name,
+        priority,
+        latitude: userLocation.latitude,
+        longitude: userLocation.longitude,
+      });
 
-  const block = useCallback(() => {
-    applyRoads(blockRoad(DEMO_ROAD_ID, roads));
-    syncRoadA(true).then(refresh);
-  }, [roads, applyRoads, refresh]);
+      if (result && result.match && result.match.matched && result.match.volunteer) {
+        const vol = result.match.volunteer;
+        setDestinationVolunteer(vol);
+        setDestinationLabel(`${vol.name} (${vol.resource || vol.skill})`);
+        setMatch(result.match);
 
-  const unblock = useCallback(() => {
-    applyRoads(unblockRoad(DEMO_ROAD_ID, roads));
-    syncRoadA(false).then(refresh);
-  }, [roads, applyRoads, refresh]);
-
-  const requestResource = useCallback(
-    (name = resource, priority = 'HIGH') => {
-      setMatch(findBestVolunteerMatch({ resource: name, priority, latitude: userLocation.latitude, longitude: userLocation.longitude }, MOCK_VOLUNTEERS));
-    },
-    [resource, userLocation]
-  );
+        // Immediately compute live route to matched volunteer
+        await requestRoute({ latitude: vol.latitude, longitude: vol.longitude });
+        return result.match;
+      } else {
+        setMatch(result.match || { matched: false, message: 'No nearby matching responder found.' });
+        return result.match;
+      }
+    } catch (err) {
+      const fallbackFail = { matched: false, message: 'Emergency dispatch request timed out.' };
+      setMatch(fallbackFail);
+      return fallbackFail;
+    }
+  }, [userLocation, resource, requestRoute]);
 
   const reset = useCallback(() => {
-    setRoads(INITIAL_MOCK_ROADS);
     setRoute(null);
     setMatch(null);
     setResource('Medicine');
-    syncRoadA(false).then(refresh);
+    setDestinationVolunteer(null);
+    setDestinationLabel('Nearest Response Hub');
+    refresh();
   }, [refresh]);
 
+  // Block/unblock stubs for backward-compatibility with UI
+  const block = useCallback(() => {}, []);
+  const unblock = useCallback(() => {}, []);
+
+  // Adapt volunteers for map rendering
+  const mappedVolunteers = useMemo(() => {
+    return (liveVolunteers || []).map((v) => ({
+      id: String(v.id),
+      name: v.name,
+      resource: v.resources || v.skill || 'Assistance',
+      latitude: v.latitude,
+      longitude: v.longitude,
+      availability: v.available ? 'AVAILABLE' : 'UNAVAILABLE',
+    }));
+  }, [liveVolunteers]);
+
   const value = {
-    userLocation, roads, route, match, resource, setResource, assessment,
-    zones: MOCK_RISK_ZONES, graph: INITIAL_ROAD_GRAPH, volunteers: MOCK_VOLUNTEERS,
-    roadDemo: roads.find((r) => r.id === DEMO_ROAD_ID),
-    requestRoute, block, unblock, requestResource, reset,
+    userLocation,
+    assessment,
+    route,
+    match,
+    resource,
+    setResource,
+    volunteers: mappedVolunteers,
+    destinationVolunteer,
+    destinationLabel,
+    isRouting,
+    roads: [],
+    zones: [],
+    graph: null,
+    roadDemo: blocked && blocked.length > 0 ? blocked[0] : null,
+    requestRoute,
+    requestResource,
+    block,
+    unblock,
+    reset,
   };
+
   return <ResponseContext.Provider value={value}>{children}</ResponseContext.Provider>;
 }

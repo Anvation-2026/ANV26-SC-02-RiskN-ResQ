@@ -116,8 +116,8 @@ describe('RiskNResQ Disaster Response Module', () => {
     const medicineRequest: HelpRequest = {
       resource: 'Medicine',
       priority: 'HIGH',
-      latitude: 12.9720,
-      longitude: 77.5940,
+      latitude: 12.9750,
+      longitude: 77.6040,
     };
 
     const match = findBestVolunteerMatch(medicineRequest, MOCK_VOLUNTEERS);
@@ -208,12 +208,12 @@ describe('RiskNResQ Disaster Response Module', () => {
     const dSelf = calculateDistanceKm(12.9716, 77.5946, 12.9716, 77.5946);
     expect(dSelf).toBe(0);
 
-    // Distance between Arjun (12.9710, 77.5935) and target waypoint (12.9780, 77.5950) is ~0.8 km
-    const dArjun = calculateDistanceKm(12.9710, 77.5935, 12.9780, 77.5950);
+    // Distance between Arjun (12.9765, 77.6050) and target waypoint (12.9693, 77.6050) is ~0.8 km
+    const dArjun = calculateDistanceKm(12.9765, 77.6050, 12.9693, 77.6050);
     expect(dArjun).toBe(0.8);
 
     // Symmetry
-    const dSymmetric = calculateDistanceKm(12.9780, 77.5950, 12.9710, 77.5935);
+    const dSymmetric = calculateDistanceKm(12.9693, 77.6050, 12.9765, 77.6050);
     expect(dSymmetric).toBe(0.8);
 
     // Formatting
@@ -226,8 +226,8 @@ describe('RiskNResQ Disaster Response Module', () => {
     const requestAt800m: HelpRequest = {
       resource: 'Medicine',
       priority: 'HIGH',
-      latitude: 12.9780,
-      longitude: 77.5950,
+      latitude: 12.9693,
+      longitude: 77.6050,
     };
 
     const match = findBestVolunteerMatch(requestAt800m, MOCK_VOLUNTEERS);
@@ -252,5 +252,52 @@ describe('RiskNResQ Disaster Response Module', () => {
     expect(getRiskLevelColor('MODERATE').badgeText).toBe('#854D0E');
     expect(getRiskLevelColor('HIGH').badgeText).toBe('#9A3412');
     expect(getRiskLevelColor('CRITICAL').badgeText).toBe('#991B1B');
+  });
+
+  // TEST 14: Medicine request matches Arjun and routes directly to Arjun's coordinates
+  test('TEST 14: Resource request routes to matched volunteer pin with coordinate terminal alignment', () => {
+    const medicineRequest: HelpRequest = {
+      resource: 'Medicine',
+      priority: 'HIGH',
+      latitude: 12.9716,
+      longitude: 77.5946,
+    };
+
+    const match = findBestVolunteerMatch(medicineRequest, MOCK_VOLUNTEERS);
+    expect(match.matched).toBe(true);
+
+    if (match.matched) {
+      expect(match.volunteer.name).toBe('Arjun');
+
+      // Route from origin (A) to Arjun's destination node (D)
+      const route = findRecommendedRoute('A', 'D', INITIAL_MOCK_ROADS, INITIAL_ROAD_GRAPH);
+      expect(route.success).toBe(true);
+      expect(route.nodes[route.nodes.length - 1]).toBe('D');
+
+      // Terminal coordinate matches Arjun's physical coordinates
+      if (route.coordinates && route.coordinates.length > 0) {
+        const terminalCoord = route.coordinates[route.coordinates.length - 1];
+        expect(terminalCoord.latitude).toBe(match.volunteer.latitude);
+        expect(terminalCoord.longitude).toBe(match.volunteer.longitude);
+      }
+    }
+  });
+
+  // TEST 15: Blocked road detours around Road A while still terminating at Arjun's pin
+  test('TEST 15: Road blockage reroutes via alternative corridor while terminating at matched responder', () => {
+    const blockedRoads = blockRoad('ROAD_A', INITIAL_MOCK_ROADS);
+    const detour = findRecommendedRoute('A', 'D', blockedRoads, INITIAL_ROAD_GRAPH);
+
+    expect(detour.success).toBe(true);
+    expect(detour.nodes).toEqual(['A', 'B', 'E', 'F', 'D']);
+    expect(detour.blockedRoads).toEqual([{ id: 'ROAD_A', name: '5th Cross' }]);
+
+    // Rerouted path still terminates at Arjun's coordinates
+    const arjun = MOCK_VOLUNTEERS.find((v) => v.name === 'Arjun');
+    if (detour.coordinates && detour.coordinates.length > 0) {
+      const terminalCoord = detour.coordinates[detour.coordinates.length - 1];
+      expect(terminalCoord.latitude).toBe(arjun?.latitude);
+      expect(terminalCoord.longitude).toBe(arjun?.longitude);
+    }
   });
 });

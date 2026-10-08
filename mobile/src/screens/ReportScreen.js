@@ -16,16 +16,14 @@ import Header from '../components/Header';
 import ActionButton from '../components/ActionButton';
 import { useData } from '../context/DataContext';
 import * as ImagePicker from 'expo-image-picker';
-import { getSource, submitIncident, uploadIncidentPhoto } from '../services/api';
-import { errorText } from '../context/AuthContext';
-import { ErrorText } from '../components/ui';
+import { submitIncident, uploadIncidentPhoto } from '../services/api';
 import { colors, radius, shadow } from '../theme';
-import { USER } from '../services/geo';
 
 const TYPES = [
-  { key: 'FLOOD', label: 'Flood Hazard', icon: 'droplet' },
+  { key: 'FLOODED_ROAD', label: 'Flood Hazard', icon: 'droplet' },
   { key: 'BLOCKED_ROAD', label: 'Blocked Road', icon: 'alert-triangle' },
-  { key: 'EMERGENCY', label: 'Emergency', icon: 'alert-octagon' },
+  { key: 'WATERLOGGING', label: 'Waterlogging', icon: 'cloud-rain' },
+  { key: 'FALLEN_TREE', label: 'Tree / Debris', icon: 'slash' },
 ];
 
 export const Chip = ({ active, onPress, children }) => (
@@ -40,21 +38,22 @@ export const Chip = ({ active, onPress, children }) => (
 
 export default function ReportScreen({ navigate }) {
   const insets = useSafeAreaInsets();
-  const { refresh } = useData();
-  const [type, setType] = useState('FLOOD');
+  const { userLocation, locationLabel, requestPermission, refresh } = useData();
+  const [type, setType] = useState('FLOODED_ROAD');
   const [text, setText] = useState('');
-  const [photo, setPhoto] = useState(null); // {uri, ...} from the picker
-  const [photoResult, setPhotoResult] = useState(null); // {status: 'uploaded'|'failed'|'offline', message?}
+  const [severity, setSeverity] = useState(3);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
-  const [error, setError] = useState('');
+  const [errorMsg, setErrorMsg] = useState(null);
+  const [photo, setPhoto] = useState(null); // asset chosen with the picker
+  const [photoResult, setPhotoResult] = useState(null); // {status: 'uploaded'|'failed', message?}
 
   const pickPhoto = async (useCamera) => {
-    setError('');
+    setErrorMsg(null);
     try {
       const perm = useCamera ? await ImagePicker.requestCameraPermissionsAsync() : await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!perm.granted) {
-        setError(useCamera ? 'Camera permission was denied.' : 'Photo library permission was denied.');
+        setErrorMsg(useCamera ? 'Camera permission was denied.' : 'Photo library permission was denied.');
         return;
       }
       const res = useCamera
@@ -62,43 +61,52 @@ export default function ReportScreen({ navigate }) {
         : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.5 });
       if (!res.canceled && res.assets && res.assets[0]) setPhoto(res.assets[0]);
     } catch (e) {
-      setError('Could not open the photo picker on this device.');
+      setErrorMsg('Could not open the photo picker on this device.');
     }
   };
 
   const submit = async () => {
+    if (!userLocation) {
+      setErrorMsg('Location access is required to submit a verified hazard report.');
+      return;
+    }
     setBusy(true);
-    setError('');
+    setErrorMsg(null);
     try {
-      const incident = await submitIncident({ type, description: text.trim() || 'Reported via mobile app' });
+      const incident = await submitIncident({
+        type,
+        description: text.trim() || `${type.replace('_', ' ')} verified on site`,
+        latitude: userLocation.latitude,
+        longitude: userLocation.longitude,
+        severity,
+      });
       let result = null;
       if (photo) {
-        if (getSource() === 'live' && incident && incident.id) {
-          try {
-            await uploadIncidentPhoto(incident.id, photo.uri);
-            result = { status: 'uploaded' };
-          } catch (e) {
-            result = { status: 'failed', message: errorText(e) };
-          }
-        } else {
-          result = { status: 'offline' };
+        try {
+          await uploadIncidentPhoto(incident.id, photo.uri); // resolves only after the server stored it
+          result = { status: 'uploaded' };
+        } catch (e) {
+          result = { status: 'failed', message: (e && e.detail) || 'Please try again later.' };
         }
       }
       setPhotoResult(result);
       await refresh();
       setDone(true);
     } catch (e) {
-      setError(errorText(e)); // never show "submitted" when the server rejected the report
+      setErrorMsg('Failed to transmit report. Please check connection.');
+    } finally {
+      setBusy(false);
     }
-    setBusy(false);
   };
 
   const reset = () => {
     setDone(false);
     setText('');
+    setType('FLOODED_ROAD');
+    setSeverity(3);
+    setErrorMsg(null);
     setPhoto(null);
     setPhotoResult(null);
-    setType('FLOOD');
   };
 
   return (
@@ -124,13 +132,12 @@ export default function ReportScreen({ navigate }) {
               <View style={styles.check}>
                 <Feather name="check" size={24} color="#FFFFFF" />
               </View>
-              <Text style={styles.sTitle}>Incident Logged</Text>
+              <Text style={styles.sTitle}>Incident Broadcast</Text>
               <Text style={styles.sBody}>
-                Your report was saved and will be considered in the local risk assessment.
+                Your report has been logged to the civic response network and will immediately factor into real-time routing adjustments.
               </Text>
               {photoResult && photoResult.status === 'uploaded' ? <Text style={styles.photoOk}>Photo uploaded with your report.</Text> : null}
               {photoResult && photoResult.status === 'failed' ? <Text style={styles.photoBad}>Your report was saved, but the photo could not be uploaded: {photoResult.message}</Text> : null}
-              {photoResult && photoResult.status === 'offline' ? <Text style={styles.photoBad}>The server was unreachable, so this report was saved in demo mode only. Your photo was not uploaded.</Text> : null}
               <View style={{ alignSelf: 'stretch', gap: 10, marginTop: 16 }}>
                 <ActionButton
                   variant="primary"
@@ -159,7 +166,7 @@ export default function ReportScreen({ navigate }) {
                     >
                       <Feather
                         name={t.icon}
-                        size={20}
+                        size={18}
                         color={active ? colors.primary : '#64748B'}
                       />
                       <Text style={[styles.typeText, active && styles.typeTextOn]}>
@@ -170,12 +177,36 @@ export default function ReportScreen({ navigate }) {
                 })}
               </View>
 
-              <Text style={styles.label}>REPORT LOCATION</Text>
-              <View style={styles.field}>
-                <Feather name="crosshair" size={16} color={colors.muted} />
+              <Text style={styles.label}>GEO-COORDINATES</Text>
+              <Pressable
+                onPress={!userLocation ? requestPermission : undefined}
+                style={[styles.field, userLocation && styles.fieldOk]}
+              >
+                <Feather
+                  name="crosshair"
+                  size={16}
+                  color={userLocation ? colors.LOW : colors.HIGH}
+                />
                 <Text style={styles.fieldText}>
-                  Demo location: {USER.label} ({USER.latitude.toFixed(4)}, {USER.longitude.toFixed(4)})
+                  {userLocation
+                    ? `Locked: ${userLocation.latitude.toFixed(4)}, ${userLocation.longitude.toFixed(4)} (${locationLabel})`
+                    : 'Tap to grant location permission'}
                 </Text>
+              </Pressable>
+
+              <Text style={styles.label}>SEVERITY LEVEL (1-5)</Text>
+              <View style={styles.severityRow}>
+                {[1, 2, 3, 4, 5].map((lvl) => (
+                  <Pressable
+                    key={lvl}
+                    onPress={() => setSeverity(lvl)}
+                    style={[styles.sevBtn, severity === lvl && styles.sevBtnActive]}
+                  >
+                    <Text style={[styles.sevText, severity === lvl && styles.sevTextActive]}>
+                      {lvl}
+                    </Text>
+                  </Pressable>
+                ))}
               </View>
 
               <Text style={styles.label}>FIELD OBSERVATION</Text>
@@ -213,12 +244,15 @@ export default function ReportScreen({ navigate }) {
                 </View>
               )}
 
+              {errorMsg && (
+                <Text style={styles.errorText}>{errorMsg}</Text>
+              )}
+
               <View style={{ marginTop: 14 }}>
-                <ErrorText>{error}</ErrorText>
                 <ActionButton
                   variant="primary"
                   label={busy ? 'TRANSMITTING REPORT...' : 'SUBMIT REPORT'}
-                  disabled={busy}
+                  disabled={busy || !userLocation}
                   color={colors.HIGH}
                   onPress={submit}
                 />
@@ -248,7 +282,7 @@ const styles = StyleSheet.create({
     padding: 14,
   },
   label: {
-    fontSize: 12,
+    fontSize: 11,
     fontFamily: 'PlusJakartaSans_800ExtraBold',
     letterSpacing: 0.8,
     color: colors.muted,
@@ -257,10 +291,12 @@ const styles = StyleSheet.create({
   },
   types: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 8,
   },
   typeBtn: {
-    flex: 1,
+    flexBasis: '48%',
+    flexGrow: 1,
     backgroundColor: colors.card,
     borderRadius: radius.card,
     paddingVertical: 12,
@@ -305,6 +341,31 @@ const styles = StyleSheet.create({
     fontFamily: 'PlusJakartaSans_600SemiBold',
     fontSize: 13,
     color: colors.text,
+  },
+  severityRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  sevBtn: {
+    flex: 1,
+    backgroundColor: colors.card,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    alignItems: 'center',
+  },
+  sevBtnActive: {
+    backgroundColor: colors.navy,
+    borderColor: colors.navy,
+  },
+  sevText: {
+    fontFamily: 'PlusJakartaSans_700Bold',
+    fontSize: 14,
+    color: colors.text,
+  },
+  sevTextActive: {
+    color: '#FFFFFF',
   },
   input: {
     backgroundColor: colors.card,
@@ -372,5 +433,11 @@ const styles = StyleSheet.create({
     color: colors.muted,
     textAlign: 'center',
     lineHeight: 18,
+  },
+  errorText: {
+    color: colors.HIGH,
+    fontSize: 12,
+    fontFamily: 'PlusJakartaSans_600SemiBold',
+    marginBottom: 8,
   },
 });

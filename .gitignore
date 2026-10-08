@@ -12,3 +12,7 @@ __pycache__/
 .pytest_cache/
 uploads/
 backend/uploads/
+
+.env
+*.env
+!.env.example

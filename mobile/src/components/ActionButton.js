@@ -54,7 +54,6 @@ export default function ActionButton({
 const styles = StyleSheet.create({
   tile: {
     flex: 1,
-    minWidth: '46%',
     backgroundColor: colors.card,
     borderRadius: radius.card,
     paddingVertical: 14,
@@ -63,7 +62,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 1,
     borderColor: '#E2E8F0',
-    minHeight: 90,
+    minHeight: 88,
     ...shadow,
   },
   iconWrapper: {

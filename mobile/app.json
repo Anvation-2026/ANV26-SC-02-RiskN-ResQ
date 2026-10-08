@@ -10,7 +10,7 @@
       "supportsTablet": true,
       "bundleIdentifier": "in.resq.riskn",
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "RiskN ResQ uses your location to show flood risk and blocked roads near you.",
+        "NSLocationWhenInUseUsageDescription": "RiskNResQ uses your location to show your position, assess nearby disaster risk, calculate routes and connect you with nearby community assistance.",
         "NSCameraUsageDescription": "RiskN ResQ uses the camera so you can attach a photo to an incident report.",
         "NSPhotoLibraryUsageDescription": "RiskN ResQ lets you attach a photo from your library to an incident report."
       }
@@ -35,7 +35,9 @@
       "expo-secure-store",
       [
         "expo-location",
-        { "locationWhenInUsePermission": "RiskN ResQ uses your location to show flood risk and blocked roads near you." }
+        {
+          "locationWhenInUsePermission": "RiskNResQ uses your location to show your position, assess nearby disaster risk, calculate routes and connect you with nearby community assistance."
+        }
       ],
       [
         "expo-image-picker",

@@ -47,6 +47,9 @@ export function calculateDistanceKm(
  * Helper to display human-readable distance (e.g., "800 m" or "1.5 km").
  */
 export function formatDistance(distanceKm: number): string {
+  if (typeof distanceKm !== 'number' || isNaN(distanceKm) || !isFinite(distanceKm)) {
+    return '0 m';
+  }
   if (distanceKm < 1) {
     const meters = Math.round(distanceKm * 1000);
     return `${meters} m`;

@@ -115,6 +115,12 @@ def test_low_high_low_cycle_with_single_alert_per_zone(client):
     assert len(client.get("/alerts").json()) == 3  # history kept, all inactive
 
 
+def test_simulated_alerts_are_labelled_as_drills(client):
+    simulate(client, 80, zone="Zone A")
+    alert = client.get("/alerts", params={"active_only": True}).json()[0]
+    assert alert["message"].startswith("SIMULATED DRILL (not a real warning):")
+
+
 def test_alert_content_and_affected_road(client):
     simulate(client, 80, zone="Zone A")
     client.post("/roads/1/block")  # Road A starts in Zone A

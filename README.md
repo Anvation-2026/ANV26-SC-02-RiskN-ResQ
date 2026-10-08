@@ -137,7 +137,7 @@ Nothing is deployed, and **HTTPS is not configured**. Local development uses pla
 
 ### Data labels
 
-The app never presents demo data as a real warning. The Home screen shows **DEMO DATA** (seeded or offline) or **SIMULATED DATA** (rainfall set from the admin Control screen), with a note under the risk card. There is no live real-world feed in this prototype.
+The Home screen shows where the risk comes from (for example the weather provider) and a LIVE or OFFLINE badge for the server connection. Anything an admin sets with the **Simulate hazard** control is stored as `SIMULATED`: the Admin dashboard and risk API say so, and the alerts it creates start with "SIMULATED DRILL (not a real warning)". Simulated rainfall drives the zone alerts and admin views; the Home risk card for a phone's GPS position uses real weather data, so it is not changed by a simulation. This prototype is not an official warning service.
 
 ### Logo and symbols
 

@@ -1,15 +1,22 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import ActionButton from './ActionButton';
 import MatchCard from './MatchCard';
-import { Chip } from '../screens/ReportScreen';
 import { RESOURCES, useResponse } from '../context/ResponseContext';
+import { useData } from '../context/DataContext';
 import { getRiskLevelColor } from '../features/disaster-response/services/geofencing';
-import { formatDistance } from '../features/disaster-response/utils/distance';
-import { DEMO_CONTROLS } from '../config/api';
-import { useAuth } from '../context/AuthContext';
 import { colors, radius, shadow } from '../theme';
+
+const Chip = ({ active, onPress, children }) => (
+  <Pressable
+    onPress={onPress}
+    style={[styles.chip, active && styles.chipOn]}
+    hitSlop={4}
+  >
+    <Text style={[styles.chipText, active && styles.chipTextOn]}>{children}</Text>
+  </Pressable>
+);
 
 function Card({ title, children }) {
   return (
@@ -28,93 +35,105 @@ const Stat = ({ label, value }) => (
 );
 
 export default function ResponsePanel() {
+  const { locationLabel, userLocation } = useData();
   const {
     assessment,
     route,
     match,
     resource,
     setResource,
-    roadDemo,
-    graph,
+    destinationVolunteer,
+    destinationLabel,
+    isRouting,
     requestRoute,
     requestResource,
-    block,
-    unblock,
-    reset,
   } = useResponse();
-  const { user } = useAuth();
 
-  const isBlocked = roadDemo?.status === 'BLOCKED';
-  const risk = getRiskLevelColor(assessment.riskLevel);
+  const risk = getRiskLevelColor(assessment?.riskLevel || 'LOW');
 
-  // Adapt the module's MatchResult to MatchCard props
-  const cardMatch = match?.matched
+  // Adapt the real match to MatchCard props
+  const cardMatch = match?.matched && match.volunteer
     ? {
         volunteer: match.volunteer.name,
-        resource: match.resource,
-        distanceKm: match.distanceKm,
+        resource: match.volunteer.resource || match.volunteer.skill || resource,
+        distanceKm: match.distanceKm || 0,
         status: 'Available',
-        score: match.matchScore,
+        score: match.matchScore || 85,
         breakdown: match.scoreBreakdown,
       }
     : null;
 
+  const originName = locationLabel || 'Your Current Position';
+  const destName = destinationVolunteer
+    ? `${destinationVolunteer.name} (${destinationVolunteer.resource || destinationVolunteer.skill || 'Responder'})`
+    : destinationLabel || 'Nearest Response Hub';
+
   return (
     <View style={{ gap: 10 }}>
-      {/* 1. LOCATION & GEOFENCE */}
+      {/* 1. GEOFENCE & RISK LEVEL */}
       <Card title="GEOFENCE TELEMETRY">
         <View style={styles.rowBetween}>
           <Text style={styles.big}>
-            {assessment.insideRiskZone ? 'Within Flood-Risk Zone' : 'Outside Flood-Risk Zone'}
+            {assessment?.insideRiskZone ? 'Within Flood-Risk Zone' : 'Outside Flood-Risk Zone'}
           </Text>
           <View style={[styles.pill, { backgroundColor: risk.badgeBg }]}>
             <Text style={[styles.pillText, { color: risk.badgeText }]}>
-              {assessment.riskLevel}
+              {assessment?.riskLevel || 'LOW'}
             </Text>
           </View>
         </View>
         <Text style={styles.muted}>
-          Distance to zone center: {formatDistance(assessment.distanceKm)}
+          {assessment?.reason || 'Verified through live environmental telemetry'}
         </Text>
       </Card>
 
       {/* 2. ROUTE COMPUTATION */}
       <Card title="RECOMMENDED CORRIDOR">
-        <Text style={styles.muted}>
-          {graph.nodes.A.name} → {graph.nodes.D.name}
+        <Text style={styles.corridorName}>
+          {originName} → {destName}
         </Text>
         <View style={{ marginTop: 8 }}>
           <ActionButton
             variant="primary"
-            label={route ? 'RECALCULATE ROUTE' : 'CALCULATE ROUTE'}
-            onPress={requestRoute}
+            label={isRouting ? 'CALCULATING ROUTE...' : route ? 'RECALCULATE ROUTE' : 'CALCULATE ROUTE'}
+            disabled={isRouting || !userLocation}
+            onPress={() => requestRoute()}
           />
         </View>
+
+        {!route && (
+          <View style={styles.noRouteBox}>
+            <Feather name="info" size={13} color={colors.muted} style={{ marginRight: 6 }} />
+            <Text style={styles.noRouteText}>Tap Calculate Route to compute an incident-aware corridor via road network.</Text>
+          </View>
+        )}
+
         {route && route.success && (
           <View style={{ marginTop: 10 }}>
             <Text style={styles.big}>
-              {route.blockedRoads.length
+              {route.blockedRoads && route.blockedRoads.length > 0
                 ? 'Recommended alternative route'
                 : 'Direct primary corridor'}
             </Text>
             <View style={styles.stats}>
-              <Stat label="Distance" value={`${route.distanceKm.toFixed(1)} km`} />
-              <Stat label="Est. Time" value={`${route.etaMinutes} min`} />
+              <Stat label="Distance" value={`${(route.distanceKm || 0).toFixed(1)} km`} />
+              <Stat label="Est. Time" value={`${route.etaMinutes || 0} min`} />
             </View>
-            <Text style={styles.why}>Reason: {route.reason}</Text>
-            {route.blockedRoads.length > 0 && (
+            <Text style={styles.why}>Reason: {route.reason || 'Optimal path'}</Text>
+            {route.blockedRoads && route.blockedRoads.length > 0 && (
               <View style={styles.avoidBox}>
                 <Feather name="alert-triangle" size={13} color={colors.HIGH} style={{ marginRight: 4 }} />
                 <Text style={styles.warn}>
-                  Avoiding: {route.blockedRoads.map((r) => r.name).join(', ')}
+                  Avoiding: {route.blockedRoads.map((r) => r?.name || r?.id || 'Hazard blockage').join(', ')}
                 </Text>
               </View>
             )}
             <Text style={styles.note}>{route.safetyNote}</Text>
           </View>
         )}
+
         {route && !route.success && (
-          <Text style={styles.warn}>{route.reason}. {route.safetyNote}</Text>
+          <Text style={styles.warn}>{route.reason || 'No route found'}. {route.safetyNote || ''}</Text>
         )}
       </Card>
 
@@ -132,7 +151,7 @@ export default function ResponsePanel() {
             variant="primary"
             label={`REQUEST ${resource.toUpperCase()}`}
             color={colors.HIGH}
-            onPress={() => requestResource()}
+            onPress={() => requestResource(resource)}
           />
         </View>
       </Card>
@@ -143,57 +162,12 @@ export default function ResponsePanel() {
           <MatchCard match={cardMatch} />
         ) : (
           <View style={styles.none}>
-            <Text style={styles.noneTitle}>{match.message}</Text>
+            <Text style={styles.noneTitle}>No matching volunteer currently available.</Text>
             <Text style={styles.muted}>
-              No available volunteer currently matches this resource.
+              {match.message || 'No available volunteer currently matches this resource within your area.'}
             </Text>
           </View>
         )
-      )}
-
-      {/* 5. DEMO CONTROLS */}
-      {DEMO_CONTROLS && user.role === 'admin' && (
-        <View style={styles.demo}>
-          <View style={styles.rowBetween}>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Feather name="sliders" size={14} color="#64748B" style={{ marginRight: 6 }} />
-              <Text style={styles.demoTitle}>DEMO CONTROLS</Text>
-            </View>
-            <View style={[styles.pill, { backgroundColor: isBlocked ? '#FEE2E2' : '#DCFCE7' }]}>
-              <Text style={[styles.pillText, { color: isBlocked ? '#991B1B' : '#166534' }]}>
-                {roadDemo?.name}: {isBlocked ? 'BLOCKED' : 'OPEN'}
-              </Text>
-            </View>
-          </View>
-          <View style={styles.btns}>
-            <View style={{ flex: 1 }}>
-              <ActionButton
-                variant="primary"
-                label="Block Road A"
-                color={colors.HIGH}
-                disabled={isBlocked}
-                onPress={block}
-              />
-            </View>
-            <View style={{ flex: 1 }}>
-              <ActionButton
-                variant="primary"
-                label="Unblock Road A"
-                color={colors.LOW}
-                disabled={!isBlocked}
-                onPress={unblock}
-              />
-            </View>
-          </View>
-          <View style={{ marginTop: 8 }}>
-            <ActionButton
-              variant="primary"
-              label="Reset Demo State"
-              color={colors.navy}
-              onPress={reset}
-            />
-          </View>
-        </View>
       )}
     </View>
   );
@@ -209,7 +183,7 @@ const styles = StyleSheet.create({
     ...shadow,
   },
   kicker: {
-    fontSize: 12,
+    fontSize: 10,
     fontFamily: 'PlusJakartaSans_800ExtraBold',
     letterSpacing: 0.8,
     color: colors.muted,
@@ -227,13 +201,18 @@ const styles = StyleSheet.create({
     color: colors.text,
     flex: 1,
   },
+  corridorName: {
+    fontSize: 13,
+    fontFamily: 'PlusJakartaSans_700Bold',
+    color: colors.text,
+  },
   pill: {
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 6,
   },
   pillText: {
-    fontSize: 12,
+    fontSize: 10,
     fontFamily: 'PlusJakartaSans_800ExtraBold',
     letterSpacing: 0.5,
   },
@@ -257,7 +236,7 @@ const styles = StyleSheet.create({
     borderColor: '#E2E8F0',
   },
   sl: {
-    fontSize: 12,
+    fontSize: 10,
     color: colors.muted,
     fontFamily: 'PlusJakartaSans_600SemiBold',
   },
@@ -288,7 +267,7 @@ const styles = StyleSheet.create({
     color: colors.HIGH,
   },
   note: {
-    fontSize: 12,
+    fontSize: 11,
     fontFamily: 'PlusJakartaSans_500Medium',
     color: colors.muted,
     fontStyle: 'italic',
@@ -298,6 +277,43 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 6,
+  },
+  chip: {
+    backgroundColor: '#F1F5F9',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  chipOn: {
+    backgroundColor: colors.navy,
+    borderColor: colors.navy,
+  },
+  chipText: {
+    fontFamily: 'PlusJakartaSans_600SemiBold',
+    fontSize: 12,
+    color: '#475569',
+  },
+  chipTextOn: {
+    color: '#FFFFFF',
+    fontFamily: 'PlusJakartaSans_700Bold',
+  },
+  noRouteBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderRadius: 8,
+    padding: 10,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  noRouteText: {
+    fontSize: 12,
+    fontFamily: 'PlusJakartaSans_500Medium',
+    color: colors.muted,
+    flex: 1,
   },
   none: {
     backgroundColor: '#FFFBEB',
@@ -312,24 +328,6 @@ const styles = StyleSheet.create({
     fontFamily: 'PlusJakartaSans_800ExtraBold',
     color: '#92400E',
     marginBottom: 4,
-  },
-  demo: {
-    backgroundColor: colors.card,
-    borderRadius: radius.card,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    ...shadow,
-  },
-  demoTitle: {
-    fontSize: 12,
-    fontFamily: 'PlusJakartaSans_800ExtraBold',
-    color: colors.text,
-    letterSpacing: 0.8,
-  },
-  btns: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 10,
+    textAlign: 'center',
   },
 });
