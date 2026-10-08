@@ -90,9 +90,9 @@ const styles = StyleSheet.create({
   },
   level: {
     color: '#FFFFFF',
-    fontSize: 26,
+    fontSize: 30,
     fontFamily: 'PlusJakartaSans_800ExtraBold',
-    letterSpacing: -0.5,
+    letterSpacing: -0.6,
   },
   subtext: {
     color: 'rgba(255, 255, 255, 0.9)',

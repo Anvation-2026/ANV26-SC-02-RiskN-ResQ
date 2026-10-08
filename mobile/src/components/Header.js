@@ -41,9 +41,9 @@ const styles = StyleSheet.create({
   },
   title: {
     color: '#FFFFFF',
-    fontSize: 22,
+    fontSize: 24,
     fontFamily: 'PlusJakartaSans_800ExtraBold',
-    letterSpacing: -0.2,
+    letterSpacing: -0.4,
   },
   sub: {
     color: '#94A3B8',
