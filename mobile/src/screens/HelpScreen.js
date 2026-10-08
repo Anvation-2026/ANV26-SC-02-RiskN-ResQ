@@ -7,6 +7,8 @@ import ActionButton from '../components/ActionButton';
 import MatchCard from '../components/MatchCard';
 import { Chip } from './ReportScreen';
 import { requestHelp } from '../services/api';
+import { errorText } from '../context/AuthContext';
+import { ErrorText } from '../components/ui';
 import { colors, radius, shadow } from '../theme';
 import { USER } from '../services/geo';
 
@@ -31,13 +33,15 @@ export default function HelpScreen() {
   const [priority, setPriority] = useState('HIGH');
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
+  const [error, setError] = useState('');
 
   const submit = async () => {
     setBusy(true);
+    setError('');
     try {
       setResult(await requestHelp({ type, priority }));
     } catch (e) {
-      setResult({ requestId: null, match: null });
+      setError(errorText(e)); // a rejected request is shown as an error, never as "queued"
     }
     setBusy(false);
   };
@@ -109,6 +113,7 @@ export default function HelpScreen() {
             </View>
 
             <View style={{ marginTop: 20 }}>
+              <ErrorText>{error}</ErrorText>
               <ActionButton
                 variant="primary"
                 label={busy ? 'MATCHING COMMUNITY RESPONDERS...' : 'REQUEST ASSISTANCE'}

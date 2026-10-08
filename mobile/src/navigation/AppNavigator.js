@@ -9,6 +9,7 @@ import MapScreen from '../screens/MapScreen';
 import ReportScreen from '../screens/ReportScreen';
 import HelpScreen from '../screens/HelpScreen';
 import AlertsScreen from '../screens/AlertsScreen';
+import AccountScreen from '../screens/AccountScreen';
 
 const TABS = [
   { key: 'Home', label: 'Home', icon: 'home', Screen: HomeScreen },
@@ -16,6 +17,7 @@ const TABS = [
   { key: 'Report', label: 'Report', icon: 'alert-triangle', Screen: ReportScreen },
   { key: 'Help', label: 'Help', icon: 'life-buoy', Screen: HelpScreen },
   { key: 'Alerts', label: 'Alerts', icon: 'bell', Screen: AlertsScreen },
+  { key: 'Account', label: 'Account', icon: 'user', Screen: AccountScreen },
 ];
 
 export default function AppNavigator() {

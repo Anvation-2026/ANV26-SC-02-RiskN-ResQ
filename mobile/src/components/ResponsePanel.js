@@ -8,6 +8,7 @@ import { RESOURCES, useResponse } from '../context/ResponseContext';
 import { getRiskLevelColor } from '../features/disaster-response/services/geofencing';
 import { formatDistance } from '../features/disaster-response/utils/distance';
 import { DEMO_CONTROLS } from '../config/api';
+import { useAuth } from '../context/AuthContext';
 import { colors, radius, shadow } from '../theme';
 
 function Card({ title, children }) {
@@ -41,6 +42,7 @@ export default function ResponsePanel() {
     unblock,
     reset,
   } = useResponse();
+  const { user } = useAuth();
 
   const isBlocked = roadDemo?.status === 'BLOCKED';
   const risk = getRiskLevelColor(assessment.riskLevel);
@@ -150,7 +152,7 @@ export default function ResponsePanel() {
       )}
 
       {/* 5. DEMO CONTROLS */}
-      {DEMO_CONTROLS && (
+      {DEMO_CONTROLS && user.role === 'admin' && (
         <View style={styles.demo}>
           <View style={styles.rowBetween}>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>

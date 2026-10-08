@@ -6,7 +6,6 @@ import Header from '../components/Header';
 import RiskCard from '../components/RiskCard';
 import ActionButton from '../components/ActionButton';
 import ConnectionBanner from '../components/ConnectionBanner';
-import DemoPanel from '../components/DemoPanel';
 import { useData } from '../context/DataContext';
 import { colors, radius, riskColor, shadow } from '../theme';
 import { USER } from '../services/geo';
@@ -107,7 +106,6 @@ export default function HomeScreen({ navigate }) {
           />
         </View>
 
-        <DemoPanel />
       </ScrollView>
     </View>
   );

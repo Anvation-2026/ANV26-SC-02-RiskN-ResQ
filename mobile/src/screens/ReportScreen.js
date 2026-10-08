@@ -15,6 +15,8 @@ import Header from '../components/Header';
 import ActionButton from '../components/ActionButton';
 import { useData } from '../context/DataContext';
 import { submitIncident } from '../services/api';
+import { errorText } from '../context/AuthContext';
+import { ErrorText } from '../components/ui';
 import { colors, radius, shadow } from '../theme';
 import { USER } from '../services/geo';
 
@@ -43,17 +45,19 @@ export default function ReportScreen({ navigate }) {
   const [photo, setPhoto] = useState(false);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
+  const [error, setError] = useState('');
 
   const submit = async () => {
     setBusy(true);
+    setError('');
     try {
       await submitIncident({ type, description: text.trim() || 'Reported via mobile app' });
       await refresh();
+      setDone(true);
     } catch (e) {
-      /* api layer already falls back; never crash */
+      setError(errorText(e)); // never show "submitted" when the server rejected the report
     }
     setBusy(false);
-    setDone(true);
   };
 
   const reset = () => {
@@ -173,6 +177,7 @@ export default function ReportScreen({ navigate }) {
               </Pressable>
 
               <View style={{ marginTop: 14 }}>
+                <ErrorText>{error}</ErrorText>
                 <ActionButton
                   variant="primary"
                   label={busy ? 'TRANSMITTING REPORT...' : 'SUBMIT REPORT'}

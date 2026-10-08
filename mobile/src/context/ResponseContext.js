@@ -21,7 +21,7 @@ export const DEMO_ROAD_ID = 'ROAD_A';
 export const RESOURCES = ['Medicine', 'Food', 'Water', 'First Aid', 'Evacuation'];
 
 export function ResponseProvider({ children }) {
-  const { refresh } = useData();
+  const { refresh, roads: backendRoads, source } = useData();
   const [userLocation, setUserLocation] = useState(DEMO_FALLBACK_LOCATION);
   const [roads, setRoads] = useState(INITIAL_MOCK_ROADS);
   const [route, setRoute] = useState(null);
@@ -32,19 +32,30 @@ export function ResponseProvider({ children }) {
     if (USE_DEVICE_LOCATION) getCurrentUserLocation().then(setUserLocation);
   }, []);
 
+  // When the backend is live, its road state is the truth: an admin blocking Road A there must show up here
+  // (and in every user's route) without anyone touching local controls.
+  useEffect(() => {
+    if (source !== 'live' || !backendRoads || !backendRoads.length) return;
+    const blockedUpstream = backendRoads[0].status === 'BLOCKED'; // backend "Road A" <-> module ROAD_A
+    setRoads((prev) => {
+      const blockedNow = prev.find((r) => r.id === DEMO_ROAD_ID)?.status === 'BLOCKED';
+      if (blockedNow === blockedUpstream) return prev;
+      return blockedUpstream ? blockRoad(DEMO_ROAD_ID, prev) : unblockRoad(DEMO_ROAD_ID, prev);
+    });
+  }, [source, backendRoads]);
+
   const assessment = useMemo(() => isInsideRiskZone(userLocation, PRIMARY_DEMO_RISK_ZONE), [userLocation]);
 
   const compute = (currentRoads) => findRecommendedRoute(ORIGIN_NODE, DESTINATION_NODE, currentRoads, INITIAL_ROAD_GRAPH);
 
   const requestRoute = useCallback(() => setRoute(compute(roads)), [roads]);
 
-  const applyRoads = useCallback(
-    (next) => {
-      setRoads(next);
-      if (route) setRoute(compute(next)); // keep an already-requested route in step
-    },
-    [route]
-  );
+  // keep an already-requested route in step with road changes (local or from the backend)
+  useEffect(() => {
+    setRoute((r) => (r ? compute(roads) : r));
+  }, [roads]);
+
+  const applyRoads = useCallback((next) => setRoads(next), []);
 
   const block = useCallback(() => {
     applyRoads(blockRoad(DEMO_ROAD_ID, roads));

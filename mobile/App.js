@@ -10,9 +10,8 @@ import {
   PlusJakartaSans_700Bold,
   PlusJakartaSans_800ExtraBold,
 } from '@expo-google-fonts/plus-jakarta-sans';
-import { DataProvider } from './src/context/DataContext';
-import { ResponseProvider } from './src/context/ResponseContext';
-import AppNavigator from './src/navigation/AppNavigator';
+import { AuthProvider } from './src/context/AuthContext';
+import RootNavigator from './src/navigation/RootNavigator';
 
 export default function App() {
   const [loaded, error] = useFonts({
@@ -29,14 +28,12 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <DataProvider>
-        <ResponseProvider>
-          <View style={{ flex: 1, backgroundColor: '#0B1F33' }}>
-            <StatusBar style="light" />
-            <AppNavigator />
-          </View>
-        </ResponseProvider>
-      </DataProvider>
+      <AuthProvider>
+        <View style={{ flex: 1, backgroundColor: '#0B1F33' }}>
+          <StatusBar style="light" />
+          <RootNavigator />
+        </View>
+      </AuthProvider>
     </SafeAreaProvider>
   );
 }

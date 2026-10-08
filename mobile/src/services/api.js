@@ -4,34 +4,47 @@ import { API_BASE_URL, FORCE_MOCK, REQUEST_TIMEOUT_MS, FLOOD_RAINFALL_MM, NORMAL
 import { USER, routeInfo } from './geo';
 import { matchBackendVolunteers } from '../integration/volunteerAdapter';
 import * as mock from './mockData';
+import { getToken, notifyUnauthorized } from './session';
 
 let source = 'demo'; // 'live' | 'demo' — what the last call actually used
 export const getSource = () => source;
 
-async function http(path, options = {}) {
+export async function http(path, options = {}) {
   if (FORCE_MOCK) throw new Error('mock mode');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const token = getToken();
   try {
     const res = await fetch(API_BASE_URL + path, {
-      headers: { 'Content-Type': 'application/json' },
       ...options,
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options.headers },
       body: options.body ? JSON.stringify(options.body) : undefined,
       signal: controller.signal,
     });
-    if (!res.ok) throw new Error(`${res.status} ${path}`);
+    if (!res.ok) {
+      let detail = null;
+      try { const b = await res.json(); detail = typeof b.detail === 'string' ? b.detail : null; } catch (e) { /* not JSON */ }
+      const err = new Error(detail || `Request failed (${res.status})`);
+      err.status = res.status;
+      err.detail = detail;
+      if (res.status === 401 && token && !path.startsWith('/auth/login')) notifyUnauthorized();
+      throw err;
+    }
     return await res.json();
   } finally {
     clearTimeout(timer);
   }
 }
 
+// Demo data is used ONLY when the server cannot be reached. A real HTTP error (validation, permission,
+// expired login) is never turned into a fake success: it is re-thrown for the screen to show.
 async function withFallback(live, fallback) {
   try {
     const data = await live();
     source = 'live';
     return data;
   } catch (e) {
+    if (e && e.status) throw e;
     source = 'demo';
     return fallback();
   }
@@ -61,7 +74,7 @@ export async function getRoute() {
 
 // ── writes ─────────────────────────────────────────────
 export function submitIncident({ type, description }) {
-  const body = { type, description, severity: 3, latitude: USER.latitude, longitude: USER.longitude, user_id: 1 };
+  const body = { type, description, severity: 3, latitude: USER.latitude, longitude: USER.longitude };
   return withFallback(() => http('/incidents', { method: 'POST', body }), () => mock.mockSubmitIncident(body));
 }
 
@@ -69,10 +82,10 @@ let lastMatch = null;
 export const getMatch = () => lastMatch;
 
 export async function requestHelp({ type, priority }) {
-  const body = { user_id: 1, type, priority, latitude: USER.latitude, longitude: USER.longitude };
+  const body = { type, priority, latitude: USER.latitude, longitude: USER.longitude };
   const request = await withFallback(() => http('/help-request', { method: 'POST', body }), () => mock.mockHelp(body));
   const live = source === 'live';
-  const volunteers = live ? await http('/volunteers').catch(() => mock.mockVolunteers()) : mock.mockVolunteers();
+  const volunteers = live ? await http('/volunteers').catch(() => []) : mock.mockVolunteers();
   const result = matchBackendVolunteers(volunteers, body); // module matching engine
   const match = result.matched
     ? {
