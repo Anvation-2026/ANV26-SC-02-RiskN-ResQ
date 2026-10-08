@@ -40,7 +40,7 @@ export default function VolunteerHome({ navigate }) {
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
-      <Header title={`Hello, ${user.name.split(' ')[0]}`} subtitle="Volunteer Dashboard" />
+      <Header brand title={`Hello, ${user.name.split(' ')[0]}`} subtitle="Volunteer Dashboard" />
       <ScrollView contentContainerStyle={s.body}>
         <ErrorText>{error ? `${error} Showing the last data received.` : ''}</ErrorText>
         <ErrorText>{msg}</ErrorText>

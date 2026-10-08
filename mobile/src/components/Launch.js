@@ -1,34 +1,40 @@
 import React, { useEffect, useRef } from 'react';
-import { Animated, Easing, Image, StyleSheet, Text, View } from 'react-native';
-import { symbols } from '../assets';
+import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
 import { fonts, palette } from '../theme';
+import BrandMark from './BrandMark';
 import { useReducedMotion } from './motion';
 
-// Shown while fonts load and the saved session is restored: the logo eases in over a soft ring, then the app fades in over it.
+// Shown while fonts load and the saved session is restored: the rq mark springs in, then its wave-arrow keeps drawing
+// itself from risk (r) to rescue (q) until the app is ready.
 export default function LaunchScreen() {
   const reduced = useReducedMotion();
-  const logo = useRef(new Animated.Value(reduced ? 1 : 0)).current;
-  const ring = useRef(new Animated.Value(0)).current;
+  const tile = useRef(new Animated.Value(reduced ? 1 : 0)).current;
+  const letters = useRef(new Animated.Value(reduced ? 1 : 0)).current;
+  const draw = useRef(new Animated.Value(reduced ? 1 : 0)).current;
   const text = useRef(new Animated.Value(reduced ? 1 : 0)).current;
   useEffect(() => {
     if (reduced) return undefined;
     const intro = Animated.parallel([
-      Animated.spring(logo, { toValue: 1, friction: 6, tension: 90, useNativeDriver: true }),
-      Animated.timing(text, { toValue: 1, duration: 500, delay: 250, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+      Animated.spring(tile, { toValue: 1, friction: 6, tension: 90, useNativeDriver: true }),
+      Animated.timing(letters, { toValue: 1, duration: 380, delay: 140, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+      Animated.timing(text, { toValue: 1, duration: 480, delay: 260, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
     ]);
-    const loop = Animated.loop(Animated.timing(ring, { toValue: 1, duration: 1800, easing: Easing.out(Easing.quad), useNativeDriver: true }));
-    intro.start(); loop.start();
-    return () => { intro.stop(); loop.stop(); };
+    const loop = Animated.loop(Animated.sequence([
+      Animated.timing(draw, { toValue: 1, duration: 760, easing: Easing.inOut(Easing.cubic), useNativeDriver: false }),
+      Animated.delay(520),
+      Animated.timing(draw, { toValue: 0, duration: 0, useNativeDriver: false }),
+      Animated.delay(120),
+    ]));
+    intro.start();
+    const t = setTimeout(() => loop.start(), 300);
+    return () => { clearTimeout(t); intro.stop(); loop.stop(); };
   }, [reduced]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <View style={s.root} accessibilityRole="progressbar" accessibilityLabel="RiskN ResQ is loading">
-      <Animated.View style={[s.ring, { opacity: ring.interpolate({ inputRange: [0, 1], outputRange: [0.45, 0] }), transform: [{ scale: ring.interpolate({ inputRange: [0, 1], outputRange: [0.8, 2.1] }) }] }]} />
-      <Animated.View style={{ opacity: logo, transform: [{ scale: logo.interpolate({ inputRange: [0, 1], outputRange: [0.6, 1] }) }] }}>
-        <Image source={symbols.logo} style={s.logo} />
-      </Animated.View>
+      <BrandMark size={104} tile={tile} letters={letters} draw={draw} style={{ marginBottom: 20 }} />
       <Animated.View style={{ opacity: text, transform: [{ translateY: text.interpolate({ inputRange: [0, 1], outputRange: [10, 0] }) }], alignItems: 'center' }}>
         <Text style={s.brand}>RiskN ResQ</Text>
-        <Text style={s.tag}>Hyper-local flood intelligence</Text>
+        <Text style={s.tag}>From risk to rescue</Text>
       </Animated.View>
     </View>
   );
@@ -36,8 +42,6 @@ export default function LaunchScreen() {
 
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: palette.ink, alignItems: 'center', justifyContent: 'center' },
-  ring: { position: 'absolute', width: 120, height: 120, borderRadius: 60, borderWidth: 2, borderColor: palette.accent },
-  logo: { width: 84, height: 84, borderRadius: 22, marginBottom: 18 },
   brand: { fontFamily: fonts.extrabold, fontSize: 28, color: '#FFFFFF', letterSpacing: -0.5 },
   tag: { fontFamily: fonts.medium, fontSize: 13, color: '#94A3B8', marginTop: 4 },
 });

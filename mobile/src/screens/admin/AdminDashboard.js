@@ -24,7 +24,7 @@ export default function AdminDashboard({ navigate }) {
   const critical = prov.data ? prov.data.high_risk_zones.length : null;
   return (
     <View style={{ flex: 1 }}>
-      <Header title="Admin Dashboard" subtitle={`Signed in as ${user.name}`} right={<SmallButton label="Log out" outline color="#fff" onPress={logout} />} />
+      <Header brand title="Admin Dashboard" subtitle={`Signed in as ${user.name}`} right={<SmallButton label="Log out" outline color="#fff" onPress={logout} />} />
       <ScrollView contentContainerStyle={styles.body}>
         <ErrorText>{s ? '' : sum.error}</ErrorText>
         {s ? (

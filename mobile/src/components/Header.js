@@ -1,9 +1,11 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Image, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '../theme';
+import { symbols } from '../assets';
 
-export default function Header({ title, subtitle, right, children }) {
+// `brand` shows the rq mark before the title (used on each portal's main screen).
+export default function Header({ title, subtitle, right, children, brand }) {
   const insets = useSafeAreaInsets();
   const paddingTop = Math.max(insets.top, 40) + 6;
 
@@ -11,6 +13,7 @@ export default function Header({ title, subtitle, right, children }) {
     <View style={[styles.wrap, { paddingTop }]}>
       <View style={styles.glow} pointerEvents="none" />
       <View style={styles.row}>
+        {brand ? <Image source={symbols.logo} style={styles.mark} accessibilityLabel="RiskN ResQ" /> : null}
         <View style={{ flex: 1 }}>
           <Text style={styles.title}>{title}</Text>
           {subtitle ? <Text style={styles.sub} numberOfLines={1}>{subtitle}</Text> : null}
@@ -54,6 +57,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 2,
   },
+  mark: { width: 40, height: 40, borderRadius: 11, marginRight: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)' },
   childContainer: {
     marginTop: 8,
   },

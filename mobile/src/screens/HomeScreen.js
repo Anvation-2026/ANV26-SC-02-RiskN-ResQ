@@ -77,7 +77,8 @@ export default function HomeScreen({ navigate }) {
   return (
     <View style={styles.container}>
       <Header
-        title="RiskNResQ"
+        brand
+        title="RiskN ResQ"
         subtitle="Hyper-Local Disaster Early Warning Network"
         right={
           <View style={[styles.pill, { backgroundColor: source === 'live' ? '#16A34A' : '#64748B' }]}>
@@ -106,7 +107,7 @@ export default function HomeScreen({ navigate }) {
               <Text style={styles.permissionTitle}>Location Permission Required</Text>
             </View>
             <Text style={styles.permissionBody}>
-              RiskNResQ requires your device GPS location to provide verified hyper-local rainfall calculations, corridor obstruction alerts, and community response dispatch.
+              RiskN ResQ requires your device GPS location to provide verified hyper-local rainfall calculations, corridor obstruction alerts, and community response dispatch.
             </Text>
             <Pressable style={styles.enableBtn} onPress={requestPermission}>
               <Feather name="crosshair" size={14} color="#FFFFFF" style={{ marginRight: 6 }} />
