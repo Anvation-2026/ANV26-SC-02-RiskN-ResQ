@@ -34,10 +34,19 @@ export const topInset = Platform.select({
   default: 20,
 });
 
+// Plus Jakarta Sans weights (loaded in App.js via @expo-google-fonts)
+export const fonts = {
+  regular: 'PlusJakartaSans_400Regular',
+  medium: 'PlusJakartaSans_500Medium',
+  semibold: 'PlusJakartaSans_600SemiBold',
+  bold: 'PlusJakartaSans_700Bold',
+  extrabold: 'PlusJakartaSans_800ExtraBold',
+};
+
 export const type = {
-  h1: { fontSize: 24, fontFamily: 'PlusJakartaSans_800ExtraBold', color: colors.text },
-  h2: { fontSize: 18, fontFamily: 'PlusJakartaSans_700Bold', color: colors.text },
-  body: { fontFamily: 'PlusJakartaSans_400Regular', fontSize: 15, lineHeight: 22, color: colors.text },
-  muted: { fontFamily: 'PlusJakartaSans_400Regular', fontSize: 13, color: colors.muted },
-  label: { fontSize: 12, fontFamily: 'PlusJakartaSans_700Bold', letterSpacing: 0.8, color: colors.muted },
+  h1: { fontSize: 24, fontFamily: fonts.extrabold, letterSpacing: -0.3, color: colors.text },
+  h2: { fontSize: 18, fontFamily: fonts.bold, color: colors.text },
+  body: { fontFamily: fonts.regular, fontSize: 15, lineHeight: 22, color: colors.text },
+  muted: { fontFamily: fonts.regular, fontSize: 13, color: colors.muted },
+  label: { fontSize: 12, fontFamily: fonts.bold, letterSpacing: 0.8, color: colors.muted },
 };
