@@ -1,6 +1,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { POLL_MS, USE_DEVICE_LOCATION } from '../config/api';
-import { getRoadStatus, getWeatherMonitoring, getZoneAlerts, syncTelemetry } from '../services/api';
+import { getIntelligenceOverview, getPlaces, getRoadStatus, getWeatherMonitoring, getZoneAlerts, syncTelemetry } from '../services/api';
+import { saveMyLocation } from '../services/accountApi';
+import { loadJSON, saveJSON } from '../services/storage';
 import {
   checkLocationPermission,
   requestLocationPermission,
@@ -11,6 +13,7 @@ import {
   setManualLocation,
 } from '../services/locationService';
 
+const CACHE_KEY = 'risknresq_cache_v1';
 const DataContext = createContext(null);
 export const useData = () => useContext(DataContext);
 
@@ -29,6 +32,16 @@ export function DataProvider({ children }) {
   const [source, setSource] = useState('live');
   const [lastUpdated, setLastUpdated] = useState(null);
   const [backendError, setBackendError] = useState(null);
+  const [places, setPlaces] = useState([]); // hospitals and shelters
+  const [intel, setIntel] = useState(null); // flood-intelligence overview: risk cells, hotspots, satellite water change, road risk, provider status
+  const [cachedAt, setCachedAt] = useState(null); // set only while showing saved data because the server is unreachable
+  const lastPosted = useRef(0);
+  const slowFetchedAt = useRef(0);
+  const roadStatusRef = useRef([]);
+  const monitorRef = useRef(null);
+  const intelRef = useRef(null);
+  const riskRef = useRef(null); // lets the failure path know whether live data was ever shown, without re-creating refresh()
+  useEffect(() => { riskRef.current = risk; }, [risk]);
 
   const busyRef = useRef(false);
 
@@ -88,15 +101,21 @@ export function DataProvider({ children }) {
     busyRef.current = true;
 
     try {
-      const [bundle, alertsRes, roadsRes, monitorRes] = await Promise.all([
+      // Risk, weather and alerts every cycle; the larger, slower-changing sets (roads, the weather grid, the intelligence overview)
+      // at most every 30 s. The backend already caches all of them, this just keeps phones from re-downloading ~80 KB every poll.
+      const slowDue = Date.now() - slowFetchedAt.current > 30000;
+      const [bundle, alertsRes, roadsRes, monitorRes, intelRes] = await Promise.all([
         syncTelemetry(userLocation.latitude, userLocation.longitude),
         getZoneAlerts().catch(() => null), // a failure here must not hide the rest of the telemetry
-        getRoadStatus().catch(() => null),
-        getWeatherMonitoring().catch(() => null),
+        slowDue ? getRoadStatus().catch(() => null) : null,
+        slowDue ? getWeatherMonitoring().catch(() => null) : null,
+        slowDue ? getIntelligenceOverview(userLocation.latitude, userLocation.longitude).catch(() => null) : null, // optional: the app works without it
       ]);
-      if (monitorRes) setWeatherMonitor(monitorRes);
+      if (slowDue) slowFetchedAt.current = Date.now();
+      if (monitorRes) { setWeatherMonitor(monitorRes); monitorRef.current = monitorRes; }
+      if (intelRes) { setIntel(intelRes); intelRef.current = intelRes; }
       if (alertsRes) setZoneAlerts(alertsRes);
-      if (roadsRes) setRoadStatus(roadsRes);
+      if (roadsRes) { setRoadStatus(roadsRes); roadStatusRef.current = roadsRes; }
       const rawRisk = bundle.risk;
       const normalizedRisk = rawRisk ? {
         ...rawRisk,
@@ -113,14 +132,40 @@ export function DataProvider({ children }) {
       setSource('live');
       setLastUpdated(Date.now());
       setBackendError(null);
+      setCachedAt(null);
+      saveJSON(CACHE_KEY, { savedAt: Date.now(), risk: normalizedRisk, weather: bundle.weather || null, incidents: bundle.incidents || [],
+        volunteers: bundle.volunteers || [], zoneAlerts: alertsRes || [], roadStatus: roadsRes || roadStatusRef.current, weatherMonitor: monitorRes || monitorRef.current, intel: intelRes || intelRef.current });
     } catch (err) {
       setSource('offline');
       setBackendError('Unable to connect to the server.');
+      const saved = await loadJSON(CACHE_KEY); // the last real data we received, clearly labelled as saved, never invented
+      if (saved && !riskRef.current) {
+        setRisk(saved.risk); setWeather(saved.weather); setIncidents(saved.incidents); setVolunteers(saved.volunteers);
+        setZoneAlerts(saved.zoneAlerts); setRoadStatus(saved.roadStatus); setWeatherMonitor(saved.weatherMonitor); setIntel(saved.intel || null);
+      }
+      if (saved) setCachedAt(saved.savedAt);
     } finally {
       busyRef.current = false;
       setLoading(false);
     }
   }, [userLocation]);
+
+  // Tell the backend where this user last was (used only to decide who receives an area alert), at most every 5 minutes.
+  useEffect(() => {
+    if (userLocation && Date.now() - lastPosted.current > 300000) {
+      lastPosted.current = Date.now();
+      saveMyLocation(userLocation.latitude, userLocation.longitude).catch(() => {});
+    }
+  }, [userLocation]);
+
+  // Hospitals and shelters change rarely: load them on start and every 10 minutes.
+  useEffect(() => {
+    if (!userLocation) return undefined;
+    const load = () => getPlaces(userLocation.latitude, userLocation.longitude).then(setPlaces).catch(() => {});
+    load();
+    const id = setInterval(load, 600000);
+    return () => clearInterval(id);
+  }, [userLocation && Math.round(userLocation.latitude * 20), userLocation && Math.round(userLocation.longitude * 20)]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (userLocation) {
@@ -166,8 +211,8 @@ export function DataProvider({ children }) {
         status: 'BLOCKED',
       }));
     const fromAdmin = roadStatus
-      .filter((r) => r.status === 'BLOCKED')
-      .map((r) => ({ id: `road-${r.id}`, name: r.name, coordinates: r.coordinates, status: 'BLOCKED', closedByAdmin: true }));
+      .filter((r) => r.status === 'BLOCKED' || r.risk_state === 'VERIFIED_BLOCKED' || r.risk_state === 'REPORTED_BLOCKED')
+      .map((r) => ({ id: `road-${r.id}`, name: r.name, coordinates: r.coordinates, status: 'BLOCKED', closedByAdmin: r.status === 'BLOCKED', riskState: r.risk_state }));
     return [...fromAdmin, ...fromIncidents];
   }, [incidents, roadStatus]);
 
@@ -182,7 +227,10 @@ export function DataProvider({ children }) {
       affected_road: a.affected_road,
       risk_score: a.risk_score,
       created_at: a.updated_at || a.created_at,
-      drill: /^SIMULATED DRILL/i.test(a.message || ''),
+      drill: !!a.simulated || /^SIMULATED DRILL/i.test(a.message || ''),
+      sources: a.sources || [],
+      recommended_action: a.recommended_action,
+      probability: a.probability,
     }));
     const fromIncidents = incidents
       .filter((inc) => inc.status !== 'RESOLVED' && (inc.severity >= 3 || inc.type === 'FLOODED_ROAD' || inc.type === 'BLOCKED_ROAD'))
@@ -229,6 +277,9 @@ export function DataProvider({ children }) {
     gpsRisk: risk,
     weather,
     weatherMonitor,
+    places,
+    intel,
+    cachedAt,
     incidents,
     volunteers,
     blocked,

@@ -4,6 +4,7 @@ import logging
 import math
 import os
 import re
+import time
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -21,6 +22,7 @@ import config
 import db
 import storage
 from engine import (
+    _age_hours,
     _km,
     compute_flood_risk,
     compute_risk,
@@ -32,10 +34,25 @@ from engine import (
     refresh_zone,
     select_best_valid_route,
     similar_count,
+    trust_factors,
 )
 from providers.routing.base import RoutePoint
 from providers.routing.router import CompositeRoutingProvider
+import audit
+import engine
+import flood_intel
+import intel_jobs
+import road_risk
+import routes_intel
+import routing_service
+import hardening
+import notify
 import weather_monitor
+from providers.climate.era5 import ERA5Provider
+from providers.satellite.planetary import PlanetaryComputerProvider
+from providers.terrain.open_meteo_dem import OpenMeteoDEMProvider
+from providers.waterlevel.base import GaugeWaterLevelProvider
+from providers.waterlevel.glofas import GloFASProvider
 from providers.weather.imd import IMDProvider
 from providers.weather.open_meteo import OpenMeteoProvider
 
@@ -81,12 +98,16 @@ async def lifespan(app: FastAPI):
     db.init_db(reset=False)
     auth.ensure_admin()
     logger.info("Database initialized. Ready for real telemetry.")
-    monitor = asyncio.create_task(weather_monitor.run_forever(weather_provider)) if config.WEATHER_MONITOR_ENABLED else None
+    tasks = []
+    if config.WEATHER_MONITOR_ENABLED:
+        tasks.append(asyncio.create_task(weather_monitor.run_forever(weather_provider)))
+    if config.INTEL_ENABLED:
+        tasks.append(asyncio.create_task(intel_jobs.run_forever(intel_providers)))
     try:
         yield
     finally:
-        if monitor:
-            monitor.cancel()
+        for t in tasks:
+            t.cancel()
 
 
 app = FastAPI(
@@ -96,6 +117,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+import routes_account
+import routes_admin
+app.include_router(routes_account.router)
+app.include_router(routes_admin.router)
+app.include_router(routes_intel.router)
+if config.CORS_ORIGINS == ["*"] and hardening.TRUST_PROXY:
+    logger.warning("CORS is open to every origin while TRUST_PROXY is set (a deployment): set CORS_ORIGINS to your web address.")
+app.add_middleware(hardening.RateLimitMiddleware)
+app.add_middleware(hardening.RequestLogMiddleware)
+hardening.init_sentry()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -108,6 +139,12 @@ weather_provider = (
     IMDProvider(config.IMD_API_KEY) if config.IMD_API_KEY else OpenMeteoProvider()
 )
 routing_provider = CompositeRoutingProvider(config.GOOGLE_ROUTES_API_KEY)
+routes_admin.provider = weather_provider
+intel_providers = intel_jobs.Providers(
+    weather=weather_provider, satellite=PlanetaryComputerProvider(), terrain=OpenMeteoDEMProvider(),
+    water=[GaugeWaterLevelProvider(), GloFASProvider()], climate=ERA5Provider())
+routes_intel.providers = intel_providers
+routes_intel.routing_provider = routing_provider
 
 
 # ---------- Exception Handlers ----------
@@ -151,6 +188,13 @@ def incident_out(c, r, include_user: bool = False) -> dict:
     d["trust_score"] = compute_trust(c, d)
     d["similar_reports"] = similar_count(c, d)
     d["confidence"] = confidence_label(d["trust_score"])
+    ctx = flood_intel.env_context(c, d["latitude"], d["longitude"])
+    if ctx.get("covered"):  # how the environment at that spot compares with the report
+        d["environmental_context"] = [t for ok, t in (
+            (ctx["heavy_rain"], "Heavy rainfall recorded in this area"), (ctx["satellite_abnormal"], "Satellite shows abnormal water expansion here"),
+            (ctx["flood_prone"], "Low-lying, flood-susceptible ground")) if ok] or ["No heavy rain or satellite evidence in this area at the moment"]
+    if include_user:  # admins see why a report is (not) trusted
+        d["trust_factors"] = trust_factors(c, d)
     d["user_id"] = d.get("user_id") if include_user else None
     # storage details stay server-side; clients only learn whether a photo exists (fetched via /incidents/{id}/photo)
     d["has_photo"] = bool(d.pop("photo_file", None)) | bool(d.pop("photo_url", None))
@@ -158,7 +202,10 @@ def incident_out(c, r, include_user: bool = False) -> dict:
 
 
 def road_out(r) -> dict:
-    return {"id": r["id"], "name": r["name"], "coordinates": json.loads(r["coordinates"]), "status": r["status"]}
+    k = r.keys()
+    return {"id": r["id"], "name": r["name"], "coordinates": json.loads(r["coordinates"]), "status": r["status"],
+            "source": r["source"] if "source" in k else "SEED", "low_lying": bool(r["low_lying"]) if "low_lying" in k else False,
+            "elevation_m": r["elevation"] if "elevation" in k else None}
 
 
 def alert_out(r) -> dict:
@@ -175,6 +222,10 @@ def alert_out(r) -> dict:
         "active": bool(d["active"]),
         "created_at": d["created_at"],
         "updated_at": d.get("updated_at"),
+        "sources": json.loads(d["sources"]) if d.get("sources") else [],
+        "recommended_action": d.get("action"),
+        "probability": d.get("probability"),
+        "simulated": (d.get("message") or "").startswith("SIMULATED DRILL"),
     }
 
 
@@ -200,7 +251,66 @@ def volunteer_full(c, r) -> dict:
         "email": u["email"] if u else None,
         "phone": u["phone"] if u else d.get("phone"),
         "has_login": bool(u),
+        "quantities": json.loads(d["quantities"]) if d.get("quantities") else {},
     }
+
+
+def _log_event(c, request_id: int, event: str, detail: str = "") -> None:
+    """One line in a help request's timeline (REQUESTED, MATCHED, ACCEPTED, COMPLETED, ...)."""
+    c.execute("INSERT INTO match_events(help_request_id, event, detail, at) VALUES(?,?,?,?)", (request_id, event, detail, db.now()))
+
+
+def _tell_requester(c, request_id: int, title: str, body: str) -> None:
+    r = c.execute("SELECT user_id FROM help_requests WHERE id=?", (request_id,)).fetchone()
+    if r and r["user_id"]:
+        notify.notify_users(c, [r["user_id"]], title, body, {"type": "help", "request_id": request_id})
+
+
+def _tell_volunteer(c, volunteer_id: int, title: str, body: str, request_id: int) -> None:
+    v = c.execute("SELECT user_id FROM volunteers WHERE id=?", (volunteer_id,)).fetchone()
+    if v and v["user_id"]:
+        notify.notify_users(c, [v["user_id"]], title, body, {"type": "match", "request_id": request_id})
+
+
+# Idempotency: a client may send an `Idempotency-Key` header on POST /incidents and POST /help-requests. A retry or a double tap with the
+# same key returns the first response instead of creating a second record. Kept in memory for 10 minutes per signed-in user (so it
+# protects one running instance; it is not a substitute for a shared store if you run several).
+_IDEM: dict = {}
+IDEM_TTL_S = 600
+
+
+def _idem_get(user_id: int, key: Optional[str]):
+    if not key:
+        return None
+    now = time.time()
+    for k in [k for k, (t, _) in _IDEM.items() if now - t > IDEM_TTL_S]:
+        _IDEM.pop(k, None)
+    hit = _IDEM.get((user_id, key[:80]))
+    return hit[1] if hit else None
+
+
+def _idem_put(user_id: int, key: Optional[str], response):
+    if key:
+        _IDEM[(user_id, key[:80])] = (time.time(), response)
+    return response
+
+
+ALERT_RADIUS_KM = 10.0
+
+
+def _on_alert(c, alert, risk) -> None:
+    """A real HIGH/CRITICAL alert was raised or escalated: push (and SMS for opted-in users) to people near that zone.
+    Simulated drills never notify anyone."""
+    if (alert["message"] or "").startswith("SIMULATED DRILL"):
+        return
+    zla, zlo = db.ZONES[alert["affected_zone"]]
+    ids = notify.users_near(c, zla, zlo, ALERT_RADIUS_KM)
+    notify.notify_users(c, ids, f"{alert['severity'].capitalize()} flood risk: {alert['affected_zone']}",
+                        (alert["message"] or "")[:180], {"type": "alert", "alert_id": alert["id"]},
+                        sms=alert["severity"] in ("HIGH", "CRITICAL"), cooldown="alert")
+
+
+engine.ALERT_HOOK = _on_alert
 
 
 def match_out(c, m) -> dict:
@@ -318,6 +428,7 @@ def register(body: RegisterIn):
             (body.name, auth.ROLE_USER, body.email.strip().lower(), auth.hash_password(body.password), body.phone, db.now()),
         )
         row = one(c, "users", cur.lastrowid, "User")
+        routes_account.send_verification(c, row)
         return auth.user_public(row)
 
 
@@ -371,6 +482,12 @@ async def get_risk(
     Supports coordinate queries (live weather) as well as zone queries (analytical model).
     """
     if latitude is not None and longitude is not None:
+        with db.session() as c0:
+            cell0 = flood_intel.nearest_cell(c0, latitude, longitude)
+            a0 = flood_intel.assess_cell(c0, cell0["zone"], near=(latitude, longitude)) if cell0 else None
+            if a0 and not a0["insufficient"]:
+                ev = {"latitude": latitude, "longitude": longitude, **_intel_to_risk(a0, cell0)}
+                return {**ev, "overall": ev, "zones": [ev]}
         try:
             weather = await weather_provider.get_weather(latitude, longitude)
         except Exception as e:
@@ -379,7 +496,7 @@ async def get_risk(
 
         c = db.conn()
         rows = c.execute(
-            "SELECT * FROM incidents WHERE status IN ('REPORTED', 'VERIFIED') ORDER BY id DESC"
+            "SELECT * FROM incidents WHERE duplicate_of IS NULL AND status IN ('REPORTED', 'VERIFIED') ORDER BY id DESC"
         ).fetchall()
         nearby = []
         for r in rows:
@@ -448,10 +565,20 @@ class IncidentCreate(BaseModel):
 
 
 @app.post("/incidents", status_code=status.HTTP_201_CREATED)
-def report_incident(body: IncidentCreate, user: dict = Depends(auth.current_user)):
+def report_incident(body: IncidentCreate, user: dict = Depends(auth.current_user), idempotency_key: Optional[str] = Header(None)):
+    again = _idem_get(user["id"], idempotency_key)
+    if again is not None:
+        return again
     zone = db.nearest_zone(body.latitude, body.longitude)
     now_t = db.now()
     with db.session() as c:
+        primary = None  # an existing live report of the same thing within 100 m in the last 3 h: merge instead of double-counting
+        for cand in c.execute("SELECT * FROM incidents WHERE type=? AND duplicate_of IS NULL AND status IN ('REPORTED','VERIFIED') "
+                              "ORDER BY id", (body.type,)).fetchall():
+            if haversine_meters(body.latitude, body.longitude, cand["latitude"], cand["longitude"]) <= 100.0 \
+                    and _age_hours(cand["timestamp"]) <= 3.0:
+                primary = cand
+                break
         cur = c.execute(
             "INSERT INTO incidents(type, latitude, longitude, radius_meters, description, severity, "
             "trust_score, status, reported_by, photo_url, zone, user_id, timestamp, updated_at) "
@@ -472,12 +599,16 @@ def report_incident(body: IncidentCreate, user: dict = Depends(auth.current_user
             ),
         )
         inc_id = cur.lastrowid
+        if primary:
+            c.execute("UPDATE incidents SET duplicate_of=? WHERE id=?", (primary["id"], inc_id))
+            c.execute("UPDATE incidents SET confirmations=confirmations+1, updated_at=? WHERE id=?", (now_t, primary["id"]))
+            c.execute("UPDATE incidents SET trust_score=? WHERE id=?", (compute_trust(c, one(c, "incidents", primary["id"], "Incident")), primary["id"]))
         row = one(c, "incidents", inc_id, "Incident")
         trust = compute_trust(c, dict(row))
         c.execute("UPDATE incidents SET trust_score=? WHERE id=?", (trust, inc_id))
         out = incident_out(c, one(c, "incidents", inc_id, "Incident"), include_user=user["role"] == auth.ROLE_ADMIN)
         risk = refresh_zone(c, zone)
-    return {**out, "zone_risk": risk}
+    return _idem_put(user["id"], idempotency_key, {**out, "zone_risk": risk, "merged_into": primary["id"] if primary else None})
 
 
 @app.get("/incidents")
@@ -491,7 +622,7 @@ def list_incidents(
     user: dict = Depends(auth.current_user),
 ):
     c = db.conn()
-    q = "SELECT * FROM incidents WHERE 1=1"
+    q = "SELECT * FROM incidents WHERE 1=1"  # duplicates stay listed (flagged duplicate_of) so owners and admins still see them
     args = []
     if status:
         q += " AND status=?"
@@ -593,34 +724,41 @@ class StatusIn(BaseModel):
     _norm = field_validator("status", mode="before")(norm)
 
 
-def _set_incident_status(incident_id: int, status_val: str):
+def _set_incident_status(incident_id: int, status_val: str, actor: dict = None):
     with db.session() as c:
         r = one(c, "incidents", incident_id, "Incident")
         c.execute("UPDATE incidents SET status=?, updated_at=? WHERE id=?", (status_val, db.now(), incident_id))
         zone = dict(r).get("zone") or db.nearest_zone(r["latitude"], r["longitude"])
         risk = refresh_zone(c, zone)
+        audit.record(c, actor, f"incident.{status_val.lower()}", incident_id, dict(r)["type"])
+        if status_val == "VERIFIED" and dict(r)["type"] in ("FLOOD", "FLOODED_ROAD"):  # a verified report becomes local flood history
+            ext = f"incident:{incident_id}"
+            if not c.execute("SELECT 1 FROM historical_events WHERE external_id=?", (ext,)).fetchone():
+                c.execute("INSERT INTO historical_events(latitude,longitude,event_date,kind,severity,source,notes,external_id,created_at) VALUES(?,?,?,'FLOOD',?,?,?,?,?)",
+                          (r["latitude"], r["longitude"], dict(r)["timestamp"][:10], r["severity"], "RiskN ResQ verified community report",
+                           "Verified by an administrator; a local report, not an official flood record", ext, db.now()))
         out = incident_out(c, one(c, "incidents", incident_id, "Incident"), include_user=True)
     return {**out, "zone_risk": risk}
 
 
 @app.patch("/incidents/{incident_id}")
-def update_incident(incident_id: int, body: StatusIn, _: dict = Depends(auth.require_admin)):
-    return _set_incident_status(incident_id, body.status)
+def update_incident(incident_id: int, body: StatusIn, admin: dict = Depends(auth.require_admin)):
+    return _set_incident_status(incident_id, body.status, admin)
 
 
 @app.post("/incidents/{incident_id}/verify")
-def verify_incident(incident_id: int, _: dict = Depends(auth.require_admin)):
-    return _set_incident_status(incident_id, "VERIFIED")
+def verify_incident(incident_id: int, admin: dict = Depends(auth.require_admin)):
+    return _set_incident_status(incident_id, "VERIFIED", admin)
 
 
 @app.post("/incidents/{incident_id}/reject")
-def reject_incident(incident_id: int, _: dict = Depends(auth.require_admin)):
-    return _set_incident_status(incident_id, "REJECTED")
+def reject_incident(incident_id: int, admin: dict = Depends(auth.require_admin)):
+    return _set_incident_status(incident_id, "REJECTED", admin)
 
 
 @app.post("/incidents/{incident_id}/resolve")
-def resolve_incident(incident_id: int, _: dict = Depends(auth.require_admin)):
-    return _set_incident_status(incident_id, "RESOLVED")
+def resolve_incident(incident_id: int, admin: dict = Depends(auth.require_admin)):
+    return _set_incident_status(incident_id, "RESOLVED", admin)
 
 
 # ==========================================
@@ -635,74 +773,34 @@ class RouteComputeIn(BaseModel):
 
 @app.post("/routes/compute")
 async def compute_route(body: RouteComputeIn, user: dict = Depends(auth.current_user)):
-    c = db.conn()
-    rows = c.execute(
-        "SELECT * FROM incidents WHERE status IN ('REPORTED', 'VERIFIED') ORDER BY id DESC"
-    ).fetchall()
-    incidents = [dict(r) for r in rows]
-    for inc in incidents:
-        inc["trust_score"] = compute_trust(c, inc)
-    c.close()
-
+    """Recommended route from the real street network: excludes blocked roads and blocking incidents, then prefers the
+    lower flood-risk exposure (see routing_service). Never described as 'safe'."""
     try:
-        candidates = await routing_provider.compute_routes(body.origin, body.destination)
+        with db.session() as c:
+            return await routing_service.plan_route(c, routing_provider, body.origin, body.destination)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.warning(f"Routing provider error: {e}")
         raise HTTPException(status_code=503, detail="Routing service temporarily unavailable.")
 
-    if not candidates:
-        return {
-            "success": False,
-            "origin": body.origin.model_dump(),
-            "destination": body.destination.model_dump(),
-            "message": "No traversable route found between these locations.",
-            "safetyNote": "Route calculated using available data; incident information may be outdated.",
-        }
-
-    selected, avoided = select_best_valid_route(candidates, incidents)
-
-    if not selected:
-        return {
-            "success": False,
-            "origin": body.origin.model_dump(),
-            "destination": body.destination.model_dump(),
-            "message": "No validated alternative route is currently available.",
-            "safetyNote": "All known paths pass through reported hazard zones.",
-        }
-
-    avoided_summary = [
-        {
-            "id": inc["id"],
-            "type": inc["type"],
-            "description": inc.get("description", ""),
-            "latitude": inc["latitude"],
-            "longitude": inc["longitude"],
-        }
-        for inc in avoided
-    ]
-
-    return {
-        "success": True,
-        "origin": body.origin.model_dump(),
-        "destination": body.destination.model_dump(),
-        "distanceMeters": selected.distance_meters,
-        "distanceKm": round(selected.distance_meters / 1000.0, 2),
-        "durationSeconds": selected.duration_seconds,
-        "etaMinutes": selected.eta_minutes,
-        "polyline": selected.polyline,
-        "traffic": selected.traffic,
-        "summary": selected.summary,
-        "avoidedIncidents": avoided_summary,
-        "source": selected.source,
-        "validatedAgainstIncidents": True,
-        "safetyNote": "Recommended alternative route based on available route and incident data.",
-        "generatedAt": now_iso(),
-    }
 
 
 # ==========================================
 # 6. Volunteer Management & Dispatch
 # ==========================================
+
+def clean_quantities(v):
+    if v is None:
+        return None
+    out = {}
+    for k, n in v.items():
+        key = HELP_ALIASES.get(norm(k), norm(k))
+        if key not in HELP_TYPES or not isinstance(n, int) or isinstance(n, bool) or not 0 <= n <= 100000:
+            raise ValueError(f"quantities must map {list(HELP_TYPES)} to whole numbers from 0 to 100000")
+        out[key] = n
+    return out
+
 
 class VolunteerIn(BaseModel):
     model_config = {"extra": "forbid"}
@@ -714,6 +812,12 @@ class VolunteerIn(BaseModel):
     latitude: float = Field(..., ge=-90, le=90)
     longitude: float = Field(..., ge=-180, le=180)
     available: bool = True
+    quantities: Optional[dict] = None  # resources on hand, e.g. {"MEDICINE": 12, "WATER": 40}
+
+    @field_validator("quantities")
+    @classmethod
+    def _q(cls, v):
+        return clean_quantities(v)
 
     _email = field_validator("email", mode="before")(clean_email)
     _phone = field_validator("phone", mode="before")(clean_phone)
@@ -738,6 +842,12 @@ class VolunteerUpdate(BaseModel):
     longitude: Optional[float] = Field(None, ge=-180, le=180)
     available: Optional[bool] = None
     status: Optional[Literal["ACTIVE", "DISABLED"]] = None
+    quantities: Optional[dict] = None
+
+    @field_validator("quantities")
+    @classmethod
+    def _q(cls, v):
+        return clean_quantities(v)
 
     @field_validator("email", mode="before")
     @classmethod
@@ -800,22 +910,24 @@ def list_volunteers(
 
 
 @app.post("/volunteers", status_code=status.HTTP_201_CREATED)
-def create_volunteer(body: VolunteerIn, _: dict = Depends(auth.require_admin)):
+def create_volunteer(body: VolunteerIn, admin: dict = Depends(auth.require_admin)):
     with db.session() as c:
         if c.execute("SELECT 1 FROM users WHERE LOWER(email)=?", (body.email.strip().lower(),)).fetchone():
             raise HTTPException(409, "An account with this email already exists.")
         t = db.now()
         u = c.execute(
-            "INSERT INTO users(name, role, email, password_hash, phone, created_at, is_active, latitude, longitude) "
-            "VALUES(?,?,?,?,?,?,1,?,?)",
+            "INSERT INTO users(name, role, email, password_hash, phone, created_at, is_active, latitude, longitude, email_verified) "
+            "VALUES(?,?,?,?,?,?,1,?,?,1)",
             (body.name.strip(), auth.ROLE_VOLUNTEER, body.email.strip().lower(), auth.hash_password(body.password), body.phone,
              t, body.latitude, body.longitude),
         )
         cur = c.execute(
-            "INSERT INTO volunteers(name, skill, resources, phone, latitude, longitude, available, responder_mode, user_id, status, created_at, updated_at) "
-            "VALUES(?,?,?,?,?,?,?,1,?,'ACTIVE',?,?)",  # a volunteer with a login is a responder: visible on maps and nearby lists
-            (body.name.strip(), body.skill, body.skill, body.phone, body.latitude, body.longitude, int(body.available), u.lastrowid, t, t),
+            "INSERT INTO volunteers(name, skill, resources, phone, latitude, longitude, available, responder_mode, user_id, status, created_at, updated_at, quantities) "
+            "VALUES(?,?,?,?,?,?,?,1,?,'ACTIVE',?,?,?)",  # a volunteer with a login is a responder: visible on maps and nearby lists
+            (body.name.strip(), body.skill, body.skill, body.phone, body.latitude, body.longitude, int(body.available), u.lastrowid, t, t,
+             json.dumps(body.quantities) if body.quantities else None),
         )
+        audit.record(c, admin, "volunteer.create", cur.lastrowid, f"{body.name} ({body.skill})")
         return volunteer_full(c, one(c, "volunteers", cur.lastrowid, "Volunteer"))
 
 
@@ -842,7 +954,7 @@ def _request_dict(c, v, r, **extra):
     if None not in (d["latitude"], d["longitude"], v["latitude"], v["longitude"]):
         dist = round(_km(v["latitude"], v["longitude"], d["latitude"], d["longitude"]), 2)  # existing distance helper
     return {
-        "request_id": d["id"], "type": d["type"], "priority": d["priority"], "status": d["status"],
+        "request_id": d["id"], "type": d["type"], "priority": d["priority"], "status": d["status"], "quantity": d.get("quantity") or 1,
         "latitude": d["latitude"], "longitude": d["longitude"], "distance_km": dist, "created_at": d["created_at"],
         "zone": db.nearest_zone(d["latitude"], d["longitude"]) if d["latitude"] is not None and d["longitude"] is not None else None,
         **extra,
@@ -935,11 +1047,13 @@ def claim_request(request_id: int, user: dict = Depends(auth.require_volunteer))
             (request_id, v["id"], dist or 0.0, max(1, round((dist or 0) / 25.0 * 60)), db.now()),
         )
         c.execute("UPDATE help_requests SET status='MATCHED' WHERE id=?", (request_id,))
+        _log_event(c, request_id, "ACCEPTED", f"{v['name']} accepted the request")
+        _tell_requester(c, request_id, "A volunteer is on the way", f"{v['name']} accepted your request.")
         return match_out(c, one(c, "matches", cur.lastrowid, "Match"))
 
 
 @app.put("/volunteers/{volunteer_id}")
-def update_volunteer(volunteer_id: int, body: VolunteerUpdate, _: dict = Depends(auth.require_admin)):
+def update_volunteer(volunteer_id: int, body: VolunteerUpdate, admin: dict = Depends(auth.require_admin)):
     with db.session() as c:
         v = one(c, "volunteers", volunteer_id, "Volunteer")
         d = body.model_dump(exclude_unset=True)
@@ -950,6 +1064,8 @@ def update_volunteer(volunteer_id: int, body: VolunteerUpdate, _: dict = Depends
         vol_cols = {k: d[k] for k in ("name", "skill", "latitude", "longitude") if d.get(k) is not None}
         if d.get("available") is not None:
             vol_cols["available"] = int(d["available"])
+        if d.get("quantities") is not None:
+            vol_cols["quantities"] = json.dumps(d["quantities"])
         if vol_cols:
             c.execute("UPDATE volunteers SET " + ", ".join(f"{k}=?" for k in vol_cols) + " WHERE id=?", [*vol_cols.values(), volunteer_id])
         if v["user_id"]:
@@ -966,14 +1082,16 @@ def update_volunteer(volunteer_id: int, body: VolunteerUpdate, _: dict = Depends
             _disable_volunteer(c, one(c, "volunteers", volunteer_id, "Volunteer"))
         elif d.get("status") == "ACTIVE":
             _enable_volunteer(c, one(c, "volunteers", volunteer_id, "Volunteer"))
+        audit.record(c, admin, "volunteer.update", volunteer_id, ", ".join(k for k in d if k != "password") + (" +password" if d.get("password") else ""))
         return volunteer_full(c, one(c, "volunteers", volunteer_id, "Volunteer"))
 
 
 @app.delete("/volunteers/{volunteer_id}")
-def delete_volunteer(volunteer_id: int, _: dict = Depends(auth.require_admin)):
+def delete_volunteer(volunteer_id: int, admin: dict = Depends(auth.require_admin)):
     with db.session() as c:
         v = one(c, "volunteers", volunteer_id, "Volunteer")
         _disable_volunteer(c, v)
+        audit.record(c, admin, "volunteer.disable", volunteer_id, v["name"])
         return volunteer_full(c, one(c, "volunteers", volunteer_id, "Volunteer"))
 
 
@@ -1088,6 +1206,7 @@ def get_nearby_volunteers(
 class HelpIn(BaseModel):
     type: str
     priority: Priority = "MEDIUM"
+    quantity: int = Field(1, ge=1, le=1000)
     latitude: Optional[float] = Field(None, ge=-90, le=90)
     longitude: Optional[float] = Field(None, ge=-180, le=180)
 
@@ -1122,16 +1241,18 @@ def request_visible(c, user: dict, r) -> bool:
 def create_help(body: HelpIn, user: dict = Depends(auth.current_user)):
     with db.session() as c:
         cur = c.execute(
-            "INSERT INTO help_requests(user_id,type,priority,latitude,longitude,status,created_at) "
-            "VALUES(?,?,?,?,?,'OPEN',?)",
-            (user["id"], body.type, body.priority, body.latitude, body.longitude, db.now()),
+            "INSERT INTO help_requests(user_id,type,priority,latitude,longitude,status,created_at,quantity) "
+            "VALUES(?,?,?,?,?,'OPEN',?,?)",
+            (user["id"], body.type, body.priority, body.latitude, body.longitude, db.now(), body.quantity),
         )
         row = dict(one(c, "help_requests", cur.lastrowid, "Help request"))
+        _log_event(c, row["id"], "REQUESTED", f"{body.type} ({body.priority})")
     return {"request_id": row["id"], **row}
 
 
 class HelpRequestIn(BaseModel):
     userId: Optional[int] = 1
+    quantity: int = Field(1, ge=1, le=1000)
     type: str
     priority: Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"] = "HIGH"
     latitude: float = Field(..., ge=-90.0, le=90.0)
@@ -1139,15 +1260,19 @@ class HelpRequestIn(BaseModel):
 
 
 @app.post("/help-requests", status_code=status.HTTP_201_CREATED)
-def request_help(body: HelpRequestIn, user: dict = Depends(auth.current_user)):
+def request_help(body: HelpRequestIn, user: dict = Depends(auth.current_user), idempotency_key: Optional[str] = Header(None)):
+    again = _idem_get(user["id"], idempotency_key)
+    if again is not None:
+        return again
     c = db.conn()
     now_t = now_iso()
     cur = c.execute(
-        "INSERT INTO help_requests(user_id, type, priority, latitude, longitude, status, created_at) "
-        "VALUES (?,?,?,?,?,'OPEN',?)",
-        (user["id"], body.type, body.priority, body.latitude, body.longitude, now_t),  # owner = the signed-in user, never the body
+        "INSERT INTO help_requests(user_id, type, priority, latitude, longitude, status, created_at, quantity) "
+        "VALUES (?,?,?,?,?,'OPEN',?,?)",
+        (user["id"], body.type, body.priority, body.latitude, body.longitude, now_t, body.quantity),  # owner = the signed-in user, never the body
     )
     req_id = cur.lastrowid
+    _log_event(c, req_id, "REQUESTED", f"{body.type} ({body.priority})")
 
     rows = c.execute(
         "SELECT * FROM volunteers WHERE available=1 AND latitude IS NOT NULL"
@@ -1184,6 +1309,9 @@ def request_help(body: HelpRequestIn, user: dict = Depends(auth.current_user)):
             (req_id, best_vol["id"], dist_km, eta_min, score, now_t),
         )
         c.execute("UPDATE help_requests SET status='MATCHED' WHERE id=?", (req_id,))
+        _log_event(c, req_id, "MATCHED", f"{best_vol['name']}, {dist_km} km away, about {eta_min} min")
+        _tell_volunteer(c, best_vol["id"], "New help request near you",
+                        f"{body.type.replace('_', ' ').title()} needed ({body.priority.lower()} priority), {dist_km} km away.", req_id)
 
         match_result = {
             "matched": True,
@@ -1210,13 +1338,14 @@ def request_help(body: HelpRequestIn, user: dict = Depends(auth.current_user)):
     c.commit()
     c.close()
 
-    return {
+    return _idem_put(user["id"], idempotency_key, {
         "requestId": req_id,
         "type": body.type,
         "priority": body.priority,
+        "quantity": body.quantity,
         "match": match_result,
         "createdAt": now_t,
-    }
+    })
 
 
 @app.get("/help-requests")
@@ -1226,7 +1355,19 @@ def list_help(status: Optional[Literal["OPEN", "MATCHED", "COMPLETED"]] = None, 
         q += " AND status=?"; args.append(status)
     with db.session() as c:
         rows = c.execute(q + " ORDER BY id DESC", args).fetchall()
-        return [dict(r) for r in rows if request_visible(c, user, r)]
+        out = []
+        for r in rows:
+            if not request_visible(c, user, r):
+                continue
+            item = dict(r)
+            if user["role"] == auth.ROLE_ADMIN:  # admins see who asked and who is helping, not bare ids
+                u = c.execute("SELECT name, phone FROM users WHERE id=?", (r["user_id"],)).fetchone() if r["user_id"] else None
+                m = c.execute("SELECT v.name, m.status FROM matches m JOIN volunteers v ON v.id=m.volunteer_id "
+                              "WHERE m.help_request_id=? AND m.status!='CANCELLED' ORDER BY m.id DESC", (r["id"],)).fetchone()
+                item.update(requester_name=u["name"] if u else None, requester_phone=u["phone"] if u else None,
+                            volunteer_name=m["name"] if m else None, match_status=m["status"] if m else None)
+            out.append(item)
+        return out
 
 
 @app.get("/help-requests/{request_id}")
@@ -1236,6 +1377,31 @@ def get_help(request_id: int, user: dict = Depends(auth.current_user)):
         if not request_visible(c, user, r):
             raise HTTPException(404, f"Help request {request_id} not found")
         return dict(r)
+
+
+@app.get("/help-requests/{request_id}/tracking")
+def track_help(request_id: int, user: dict = Depends(auth.current_user)):
+    """Progress of one help request: status timeline plus, once a volunteer is assigned, their live distance and ETA."""
+    with db.session() as c:
+        r = one(c, "help_requests", request_id, "Help request")
+        if not request_visible(c, user, r):
+            raise HTTPException(404, f"Help request {request_id} not found")
+        events = [dict(e) for e in c.execute("SELECT event, detail, at FROM match_events WHERE help_request_id=? ORDER BY id", (request_id,))]
+        m = c.execute("SELECT * FROM matches WHERE help_request_id=? AND status!='CANCELLED' ORDER BY id DESC", (request_id,)).fetchone()
+        volunteer = None
+        if m:
+            v = c.execute("SELECT * FROM volunteers WHERE id=?", (m["volunteer_id"],)).fetchone()
+            if v:
+                dist = None
+                if None not in (v["latitude"], v["longitude"], r["latitude"], r["longitude"]):
+                    dist = round(_km(v["latitude"], v["longitude"], r["latitude"], r["longitude"]), 2)
+                active = m["status"] in ("MATCHED", "PROPOSED", "ACCEPTED")
+                volunteer = {"name": v["name"], "phone": v["phone"] if m["status"] in ("ACCEPTED", "COMPLETED") else None,
+                             "latitude": v["latitude"] if active else None, "longitude": v["longitude"] if active else None,
+                             "distance_km": dist, "eta_minutes": max(1, round(dist / 25.0 * 60)) if dist is not None and active else None,
+                             "location_updated": v["last_location_update"]}
+        return {"request_id": request_id, "type": r["type"], "priority": r["priority"], "status": r["status"],
+                "match_status": m["status"] if m else None, "volunteer": volunteer, "timeline": events}
 
 
 # ---------- Matches ----------
@@ -1282,6 +1448,8 @@ def create_match(body: MatchIn, user: dict = Depends(auth.current_user)):
             (body.help_request_id, body.volunteer_id, db.now()),
         )
         c.execute("UPDATE help_requests SET status='MATCHED' WHERE id=?", (body.help_request_id,))
+        _log_event(c, body.help_request_id, "MATCHED", v["name"])
+        _tell_volunteer(c, body.volunteer_id, "New help request for you", f"{r['type'].replace('_', ' ').title()} needed.", body.help_request_id)
         return match_out(c, one(c, "matches", cur.lastrowid, "Match"))
 
 
@@ -1296,8 +1464,20 @@ def _match_action(match_id: int, user: dict, expect: str, new_status: str):
         if m["status"] not in allowed:
             raise HTTPException(409, f"Match is {m['status']}; it must be {' or '.join(allowed)} to do this.")
         c.execute("UPDATE matches SET status=? WHERE id=?", (new_status, match_id))
+        vol = c.execute("SELECT name FROM volunteers WHERE id=?", (m["volunteer_id"],)).fetchone()
+        _log_event(c, m["help_request_id"], new_status, (vol["name"] if vol else "") )
+        if new_status == "ACCEPTED":
+            _tell_requester(c, m["help_request_id"], "A volunteer is on the way", f"{vol['name'] if vol else 'A volunteer'} accepted your request.")
         if new_status == "COMPLETED":
             c.execute("UPDATE help_requests SET status='COMPLETED' WHERE id=?", (m["help_request_id"],))
+            req = c.execute("SELECT type, quantity FROM help_requests WHERE id=?", (m["help_request_id"],)).fetchone()
+            v = c.execute("SELECT id, quantities FROM volunteers WHERE id=?", (m["volunteer_id"],)).fetchone()
+            if req and v and v["quantities"]:  # a volunteer who tracks stock has given some away
+                q = json.loads(v["quantities"])
+                if req["type"] in q:
+                    q[req["type"]] = max(0, int(q[req["type"]]) - int(req["quantity"] or 1))
+                    c.execute("UPDATE volunteers SET quantities=? WHERE id=?", (json.dumps(q), v["id"]))
+            _tell_requester(c, m["help_request_id"], "Your help request is complete", "The volunteer marked your request as completed.")
         return match_out(c, one(c, "matches", match_id, "Match"))
 
 
@@ -1372,12 +1552,15 @@ def admin_set_user_active(user_id: int, body: UserActiveIn, admin: dict = Depend
             if not body.is_active:
                 auth.revoke_user_sessions(c, user_id)
         r = one(c, "users", user_id, "User")
+        audit.record(c, admin, "user.enable" if body.is_active else "user.disable", user_id, r["email"])
         return {"id": r["id"], "name": r["name"], "email": r["email"], "role": r["role"], "is_active": bool(r["is_active"])}
 
 
 @app.post("/reset")
-def reset(_: dict = Depends(auth.require_admin)):
+def reset(admin: dict = Depends(auth.require_admin)):
     db.reset_db()
+    with db.session() as c:
+        audit.record(c, admin, "demo.reset", "", "all incidents, alerts, help requests and matches cleared")
     purge_photos()  # the incidents they belonged to are gone
     with db.session() as c:
         risks = refresh_all(c)
@@ -1411,7 +1594,7 @@ def list_alerts(active_only: bool = False):
 
 
 @app.post("/alerts", status_code=status.HTTP_201_CREATED)
-def create_alert(body: AlertIn, _: dict = Depends(auth.require_admin)):
+def create_alert(body: AlertIn, admin: dict = Depends(auth.require_admin)):
     require_zone(body.affected_zone)
     t = db.now()
     with db.session() as c:
@@ -1420,6 +1603,7 @@ def create_alert(body: AlertIn, _: dict = Depends(auth.require_admin)):
             "VALUES(?,?,?,1,?,'MANUAL',?)",
             (body.severity, body.message.strip(), body.affected_zone, t, t),
         )
+        audit.record(c, admin, "alert.create", cur.lastrowid, f"{body.severity} {body.affected_zone}")
         return alert_out(one(c, "alerts", cur.lastrowid, "Alert"))
 
 
@@ -1432,7 +1616,7 @@ class SimIn(BaseModel):
 
 
 @app.post("/simulate-hazard")
-def simulate(body: SimIn, _: dict = Depends(auth.require_admin)):
+def simulate(body: SimIn, admin: dict = Depends(auth.require_admin)):
     require_zone(body.zone)
     zones = [body.zone] if body.zone else list(db.ZONES)
     results = []
@@ -1442,6 +1626,7 @@ def simulate(body: SimIn, _: dict = Depends(auth.require_admin)):
             c.execute("UPDATE environment_data SET rainfall=?, updated_at=?, data_source='SIMULATED' WHERE zone=?",
                       (body.rainfall, db.now(), z))
             results.append({"zone": z, "before": before, "after": refresh_zone(c, z)})
+        audit.record(c, admin, "hazard.simulate", ", ".join(zones), f"{body.rainfall:g} mm (drill)")
         alerts = [alert_out(r) for r in c.execute("SELECT * FROM alerts WHERE active=1 ORDER BY id DESC").fetchall()]
     first = results[0]
     return {
@@ -1461,7 +1646,14 @@ def list_roads(status: Optional[Literal["AVAILABLE", "BLOCKED"]] = None):
     if status:
         q += " WHERE status=?"; args.append(status)
     with db.session() as c:
-        return [road_out(r) for r in c.execute(q + " ORDER BY id", args).fetchall()]
+        risk = {x["id"]: x for x in road_risk.assess_roads(c)}
+        out = []
+        for r in c.execute(q + " ORDER BY id", args).fetchall():
+            d = road_out(r)
+            x = risk.get(r["id"], {})
+            d.update(risk_state=x.get("state", "OPEN"), risk_score=x.get("risk_score"), risk_level=x.get("risk_level"), risk_reasons=x.get("reasons", []))
+            out.append(d)
+        return out
 
 
 @app.get("/roads/{road_id}")
@@ -1470,22 +1662,23 @@ def get_road(road_id: int):
         return road_out(one(c, "roads", road_id, "Road"))
 
 
-def _set_road(road_id: int, status: str):
+def _set_road(road_id: int, status: str, actor: dict = None):
     with db.session() as c:
-        one(c, "roads", road_id, "Road")
+        road = one(c, "roads", road_id, "Road")
         c.execute("UPDATE roads SET status=? WHERE id=?", (status, road_id))
         refresh_all(c)
+        audit.record(c, actor, "road.block" if status == "BLOCKED" else "road.unblock", road_id, road["name"])
         return road_out(one(c, "roads", road_id, "Road"))
 
 
 @app.post("/roads/{road_id}/block")
-def block_road(road_id: int, _: dict = Depends(auth.require_admin)):
-    return _set_road(road_id, "BLOCKED")
+def block_road(road_id: int, admin: dict = Depends(auth.require_admin)):
+    return _set_road(road_id, "BLOCKED", admin)
 
 
 @app.post("/roads/{road_id}/unblock")
-def unblock_road(road_id: int, _: dict = Depends(auth.require_admin)):
-    return _set_road(road_id, "AVAILABLE")
+def unblock_road(road_id: int, admin: dict = Depends(auth.require_admin)):
+    return _set_road(road_id, "AVAILABLE", admin)
 
 
 # ==========================================
@@ -1513,26 +1706,57 @@ async def get_weather(latitude: float = Query(..., ge=-90.0, le=90.0), longitude
     return {**obs.model_dump(), "precipitation_mm": obs.rainfall_24h_mm, "timestamp": obs.observed_at}
 
 
+def _cell_weather(env) -> dict:
+    """The cached weather reading of a grid cell, shaped like the live provider's observation."""
+    return {"source": env["data_source"], "station": f"monitored grid cell {env['latitude']:.2f}, {env['longitude']:.2f}", "latitude": env["latitude"],
+            "longitude": env["longitude"], "rainfall_24h_mm": env["rainfall_24h"] or 0.0, "rainfall_intensity_mm_per_hour": env["rainfall"] or 0.0,
+            "rain_1h_mm": env["rain_1h"], "rain_3h_mm": env["rain_3h"], "rain_6h_mm": env["rain_6h"], "forecast_3h_mm": env["forecast_3h_mm"],
+            "forecast_6h_mm": env["forecast_6h_mm"], "warning_level": "NONE", "observed_at": env["observed_at"] or env["updated_at"], "cached": True,
+            "stale": (flood_intel.age_minutes(env["updated_at"]) or 0) > config.WEATHER_REFRESH_INTERVAL / 20.0}
+
+
+def _intel_to_risk(a: dict, env) -> dict:
+    """Intelligence assessment in the shape the app already reads (risk_score, risk_level, reason ...) plus the explanation."""
+    w = _cell_weather(env)
+    return {"risk_score": a["risk_score"], "risk_level": a["risk_level"], "weather_source": w["source"], "rainfall_24h_mm": w["rainfall_24h_mm"],
+            "rainfall_intensity_mm_per_hour": w["rainfall_intensity_mm_per_hour"], "warning_level": "NONE", "reason": a["reason"], "observed_at": w["observed_at"],
+            "probability": a["probability"], "probability_basis": a["probability_basis"], "signals": a["signals"], "missing": a["missing"], "sources": a["sources"],
+            "explanation": a["explanation"], "model": a["model"], "recommended_action": a["recommended_action"], "insufficient": False, "mode": "LIVE",
+            "incident_count": a.get("report_counts", {}).get("total", 0), "verified_incidents": a.get("report_counts", {}).get("verified", 0)}
+
+
 @app.get("/sync")
 async def sync_telemetry(
     latitude: float = Query(..., ge=-90.0, le=90.0),
     longitude: float = Query(..., ge=-180.0, le=180.0),
 ):
-    """Synchronizes live risk, weather, incidents, and responder presence in a single atomic payload."""
-    try:
-        weather = await weather_provider.get_weather(latitude, longitude)
-    except Exception:
-        weather = None
-
+    """Synchronizes live risk, weather, incidents, and responder presence in a single payload. Risk and weather come from
+    the backend's cached monitoring grid, so a phone never triggers a weather or satellite request; only a position outside
+    the monitored area falls back to one live weather query (and is labelled as such)."""
     c = db.conn()
+    cell = flood_intel.nearest_cell(c, latitude, longitude)
+    assessment = flood_intel.assess_cell(c, cell["zone"], near=(latitude, longitude)) if cell else None
+    weather = None
+    if assessment and not assessment["insufficient"]:
+        weather = _cell_weather(cell)
+    else:
+        try:
+            weather = (await weather_provider.get_weather(latitude, longitude)).model_dump()
+            weather["cached"] = False
+        except Exception:
+            weather = None
+        assessment = None
+
     inc_rows = c.execute(
-        "SELECT * FROM incidents WHERE status IN ('REPORTED', 'VERIFIED') ORDER BY id DESC"
+        "SELECT * FROM incidents WHERE duplicate_of IS NULL AND status IN ('REPORTED', 'VERIFIED') ORDER BY id DESC"
     ).fetchall()
     incidents = []
     for r in inc_rows:
         item = dict(r)
         item["trustScore"] = compute_trust(c, item)
         item["confidence"] = confidence_label(item["trustScore"])
+        item["has_photo"] = bool(item.pop("photo_file", None)) | bool(item.pop("photo_url", None))  # storage details stay server-side
+        item["user_id"] = None  # who reported is not shown to other people
         incidents.append(item)
 
     vol_rows = c.execute(
@@ -1541,22 +1765,24 @@ async def sync_telemetry(
     ).fetchall()
     volunteers = [dict(v) for v in vol_rows]
 
-    risk_eval = compute_flood_risk(weather, incidents) if weather else {
-        "risk_score": 0,
-        "risk_level": "LOW",
-        "weather_source": "Unavailable",
-        "rainfall_24h_mm": 0.0,
-        "rainfall_intensity_mm_per_hour": 0.0,
-        "warning_level": "NONE",
-        "reason": "Telemetry pending",
-    }
+    if assessment:
+        risk_eval = _intel_to_risk(assessment, cell)
+    elif weather:
+        from providers.weather.base import WeatherObservation
+        risk_eval = {**compute_flood_risk(WeatherObservation(**{k: v for k, v in weather.items() if k in WeatherObservation.model_fields}), incidents),
+                     "insufficient": False, "mode": "LIVE (direct weather query)", "signals": [], "missing": [], "sources": [], "explanation": [],
+                     "model": "Prototype flood-risk model (legacy rainfall rules)", "probability": None, "recommended_action": None}
+    else:
+        risk_eval = {"risk_score": 0, "risk_level": "LOW", "weather_source": "Unavailable", "rainfall_24h_mm": 0.0, "rainfall_intensity_mm_per_hour": 0.0,
+                     "warning_level": "NONE", "reason": "Insufficient data to estimate current flood risk.", "insufficient": True, "mode": "NO LIVE DATA",
+                     "signals": [], "missing": [], "sources": [], "explanation": [], "probability": None, "recommended_action": None}
 
     c.close()
 
     return {
         "timestamp": now_iso(),
         "risk": risk_eval,
-        "weather": weather.model_dump() if weather else None,
+        "weather": weather,
         "incidents": incidents,
         "volunteers": volunteers,
     }

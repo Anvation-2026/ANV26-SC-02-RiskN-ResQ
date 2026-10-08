@@ -16,3 +16,9 @@ backend/uploads/
 .env
 *.env
 !.env.example
+
+models/
+mobile/test-results/
+mobile/playwright-report/
+backend/e2e.db
+backend/*.db

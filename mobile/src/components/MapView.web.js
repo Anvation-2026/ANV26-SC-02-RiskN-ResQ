@@ -6,7 +6,8 @@ import { StyleSheet, Text, View } from 'react-native';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { colors, riskColor } from '../theme';
-import { drawableRain, RAIN_COLOR, RAIN_FILL, RAIN_RADIUS_KM } from './rain';
+import { useT } from '../i18n';
+import { cellCorners, drawableCells, drawableRain, RAIN_COLOR, RAIN_FILL, RAIN_RADIUS_KM, RISK_COLOR, RISK_FILL, SAT_COLOR, TERRAIN_COLOR } from './rain';
 
 const DEFAULT_POINT = { latitude: 12.9716, longitude: 77.5946 }; // used only when no location is available
 const ZONE_RADIUS_KM = { LOW: 0, MEDIUM: 0.7, MODERATE: 0.7, HIGH: 1.2, CRITICAL: 1.8 };
@@ -28,10 +29,15 @@ const dot = (color, size = 22, ring = true) => L.divIcon({
 export default function MapView({
   risk, roads: rawRoads, blocked: rawBlocked, alternative, incidents: rawIncidents, height = 340,
   zones: rawZones, routeLine: rawRoute, markers: rawMarkers, user: rawUser, labelBlockedOnly = false,
-  rainAreas = [], onRainPress,
+  rainAreas = [], onRainPress, places = [], onPlacePress,
+  riskCells = [], satelliteCells = [], hotspots = [], terrainCells = [], cellHalf, onIntelPress,
 }) {
+  const intelCb = useRef(onIntelPress);
+  intelCb.current = onIntelPress;
   const rainCb = useRef(onRainPress);
   rainCb.current = onRainPress;
+  const placeCb = useRef(onPlacePress);
+  placeCb.current = onPlacePress;
   const el = useRef(null);
   const state = useRef({ map: null, layer: null, fitted: '', bounds: null });
 
@@ -86,6 +92,32 @@ export default function MapView({
     const blockedIds = new Set(blocked.map((r) => r && r.id));
     const altId = alternative && alternative.road ? alternative.road.id : null;
 
+    // terrain susceptibility (ground that collects water; not evidence of flooding), then flood-risk cells, under everything else
+    if (cellHalf) {
+      (Array.isArray(terrainCells) ? terrainCells : []).forEach((cell) => {
+        L.polygon(cellCorners(cell, cellHalf), { color: TERRAIN_COLOR, weight: 0, fillColor: TERRAIN_COLOR, fillOpacity: 0.14, interactive: false }).addTo(layer);
+      });
+      drawableCells(riskCells).forEach((cell) => {
+        // keep the cell you are in, and any cell that is MEDIUM or worse, inside the view
+        const mine = user && Math.abs(cell.latitude - user.latitude) <= cellHalf.lat && Math.abs(cell.longitude - user.longitude) <= cellHalf.lng;
+        if (mine || cell.risk_level !== 'LOW') bounds.push([cell.latitude - cellHalf.lat, cell.longitude - cellHalf.lng], [cell.latitude + cellHalf.lat, cell.longitude + cellHalf.lng]);
+        const col = RISK_COLOR[cell.risk_level];
+        L.polygon(cellCorners(cell, cellHalf), { color: col, weight: cell.risk_level === 'LOW' ? 0 : 1, fillColor: col, fillOpacity: RISK_FILL[cell.risk_level] })
+          .on('click', () => intelCb.current && intelCb.current({ kind: 'cell', cell })).addTo(layer);
+      });
+      (Array.isArray(satelliteCells) ? satelliteCells : []).forEach((cell) => {
+        L.polygon(cellCorners(cell, cellHalf), { color: SAT_COLOR, weight: 2, dashArray: '6 5', fillColor: SAT_COLOR, fillOpacity: 0.12 })
+          .on('click', () => intelCb.current && intelCb.current({ kind: 'satellite', cell })).addTo(layer);
+        L.marker([cell.latitude, cell.longitude], { icon: emoji('🛰️', 26) }).on('click', () => intelCb.current && intelCb.current({ kind: 'satellite', cell })).addTo(layer);
+        bounds.push([cell.latitude, cell.longitude]);
+      });
+    }
+    (Array.isArray(hotspots) ? hotspots : []).filter((h) => ok(h.latitude, h.longitude)).forEach((h) => {
+      L.circle([h.latitude, h.longitude], { radius: h.radius_km * 1000, color: '#B91C1C', weight: 2, dashArray: '2 6', fill: false })
+        .on('click', () => intelCb.current && intelCb.current({ kind: 'hotspot', hotspot: h })).addTo(layer);
+      L.marker([h.latitude, h.longitude], { icon: emoji('❗', 26) }).on('click', () => intelCb.current && intelCb.current({ kind: 'hotspot', hotspot: h })).addTo(layer);
+    });
+
     // heavy-rainfall areas (weather observations, drawn under everything else; tap for details)
     drawableRain(rainAreas).forEach((a) => {
       L.circle([a.latitude, a.longitude], { radius: RAIN_RADIUS_KM * 1000, color: RAIN_COLOR[a.rain_level], weight: 1, fillColor: RAIN_COLOR[a.rain_level], fillOpacity: RAIN_FILL[a.rain_level] })
@@ -107,10 +139,11 @@ export default function MapView({
     roads.forEach((r) => {
       const isBlocked = blockedIds.has(r.id) || r.status === 'BLOCKED';
       const isAlt = r.id === altId;
-      const color = isBlocked ? colors.HIGH : isAlt ? colors.route : '#64748B';
+      const potential = !isBlocked && r.risk_state === 'POTENTIALLY_AFFECTED';
+      const color = isBlocked ? colors.HIGH : isAlt ? colors.route : potential ? '#F97316' : r.low_lying ? '#F59E0B' : '#64748B';
       L.polyline(r.coordinates, { color: '#fff', weight: 11, opacity: 0.9 }).addTo(layer);
-      L.polyline(r.coordinates, { color, weight: isBlocked || isAlt ? 7 : 5, opacity: 0.95, dashArray: isBlocked ? '10 8' : null })
-        .bindTooltip(esc(r.name || 'Road') + (isBlocked ? ' (blocked)' : ''), { permanent: !labelBlockedOnly || isBlocked, direction: 'top', className: 'rr-tip' }).addTo(layer);
+      L.polyline(r.coordinates, { color, weight: isBlocked || isAlt ? 7 : 5, opacity: 0.95, dashArray: isBlocked ? '10 8' : potential ? '4 6' : null })
+        .bindTooltip(esc(r.name || 'Road') + (isBlocked ? ' (blocked)' : potential ? ' (potentially affected)' : ''), { permanent: !labelBlockedOnly || isBlocked, direction: 'top', className: 'rr-tip' }).addTo(layer);
       if (isBlocked) L.marker(r.coordinates[Math.floor(r.coordinates.length / 2)], { icon: emoji('🚧', 30), interactive: false }).addTo(layer);
       if (isBlocked || isAlt) r.coordinates.forEach((p) => bounds.push(p)); // ordinary roads must not zoom the map out
     });
@@ -136,6 +169,13 @@ export default function MapView({
       bounds.push([m.latitude, m.longitude]);
     });
 
+    // hospitals and shelters (small round badges; tap for the name)
+    (Array.isArray(places) ? places : []).filter((p) => ok(p.latitude, p.longitude)).forEach((p) => {
+      const hospital = p.kind === 'HOSPITAL';
+      L.marker([p.latitude, p.longitude], { icon: dot(hospital ? '#DC2626' : '#0F766E', 16, false) })
+        .bindTooltip(esc(`${hospital ? 'Hospital' : 'Shelter'}: ${p.name}`)).on('click', () => placeCb.current && placeCb.current(p)).addTo(layer);
+    });
+
     // you
     if (user) {
       L.marker([user.latitude, user.longitude], { icon: dot(colors.route, 22, true), zIndexOffset: 1000 })
@@ -144,7 +184,7 @@ export default function MapView({
     }
 
     // Fit the view when the set of things changes, not on every refresh (so panning and zooming are not undone).
-    const key = JSON.stringify([user && [user.latitude.toFixed(3), user.longitude.toFixed(3)], drawableRain(rainAreas).length, roads.length, routeLine.length, markers.length, incidents.length]);
+    const key = JSON.stringify([user && [user.latitude.toFixed(3), user.longitude.toFixed(3)], drawableRain(rainAreas).length, drawableCells(riskCells).length, satelliteCells.length, hotspots.length, roads.length, routeLine.length, markers.length, incidents.length]);
     if (key !== state.current.fitted && bounds.length) {
       state.current.fitted = key;
       state.current.bounds = L.latLngBounds(bounds);
@@ -153,7 +193,8 @@ export default function MapView({
       map.fitBounds(state.current.bounds, { padding: [40, 40], maxZoom: 16, animate: false });
     }
   }, [JSON.stringify(rawRoads), JSON.stringify(rawBlocked), JSON.stringify(rawIncidents), JSON.stringify(rawMarkers), JSON.stringify(rawRoute), // eslint-disable-line react-hooks/exhaustive-deps
-    JSON.stringify(rawZones), JSON.stringify(rainAreas), level, user && user.latitude, user && user.longitude, alternative && alternative.road && alternative.road.id, labelBlockedOnly]);
+    JSON.stringify(rawZones), JSON.stringify(rainAreas), JSON.stringify(places), JSON.stringify(riskCells), JSON.stringify(satelliteCells),
+    JSON.stringify(hotspots), JSON.stringify(terrainCells), level, user && user.latitude, user && user.longitude, alternative && alternative.road && alternative.road.id, labelBlockedOnly]);
 
   return (
     <View style={[styles.map, { height }]}>
@@ -162,15 +203,19 @@ export default function MapView({
   );
 }
 
-const DEFAULT_LEGEND = [
-  ['📍', 'Your Location'], ['🌧️', 'Heavy Rainfall'], ['🔴', 'High Risk'], ['🚧', 'Blocked Road'], ['⚠️', 'Incident'], ['🛣️', 'Recommended Route'],
+const LEGEND = [
+  ['📍', 'legend.you'], ['🟢', 'legend.lowRisk'], ['🟡', 'legend.medium'], ['🟠', 'legend.high'], ['🔴', 'legend.critical'], ['🌧️', 'legend.rain'],
+  ['🛰️', 'legend.satellite'], ['❗', 'legend.hotspot'], ['🚧', 'legend.blocked'], ['⚠️', 'legend.incident'], ['🛣️', 'legend.route'],
+  ['🏥', 'legend.places'], ['🟧', 'legend.potential'],
 ];
 
-export function MapLegend({ items = DEFAULT_LEGEND }) {
+export function MapLegend({ items }) {
+  const t = useT();
+  const list = items || LEGEND.map(([i, k]) => [i, t(k)]);
   return (
     <View style={styles.legend}>
-      {items.map(([i, t]) => (
-        <View key={t} style={styles.legendItem}><Text style={{ fontSize: 14 }}>{i}</Text><Text style={styles.legendText}>{t}</Text></View>
+      {list.map(([i, label]) => (
+        <View key={label} style={styles.legendItem}><Text style={{ fontSize: 14 }}>{i}</Text><Text style={styles.legendText}>{label}</Text></View>
       ))}
     </View>
   );

@@ -6,6 +6,9 @@ import { symbols } from '../assets';
 import Header from '../components/Header';
 import AlertCard from '../components/AlertCard';
 import ConnectionBanner from '../components/ConnectionBanner';
+import SafetyGuide from '../components/SafetyGuide';
+import { FadeIn, staggerDelay } from '../components/motion';
+import { SkeletonCard } from '../components/ui';
 import { useData } from '../context/DataContext';
 import { colors, radius, shadow } from '../theme';
 
@@ -33,15 +36,12 @@ export default function AlertsScreen({ navigate }) {
           </Text>
         ) : null}
         {loading ? (
-          <Text style={styles.muted}>Loading alerts...</Text>
+          <SkeletonCard lines={3} />
         ) : alerts.length ? (
-          alerts.map((a) => (
-            <AlertCard
-              key={a.id}
-              alert={a}
-              road={road}
-              onViewRoute={() => navigate('Map')}
-            />
+          alerts.map((a, i) => (
+            <FadeIn key={a.id} delay={staggerDelay(i, 60, 300)}>
+              <AlertCard alert={a} road={road} onViewRoute={() => navigate('Map')} />
+            </FadeIn>
           ))
         ) : (
           <View style={styles.empty}>
@@ -52,6 +52,7 @@ export default function AlertsScreen({ navigate }) {
             </Text>
           </View>
         )}
+        <SafetyGuide />
       </ScrollView>
     </View>
   );

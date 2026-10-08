@@ -2,17 +2,20 @@ import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import { useData } from '../context/DataContext';
+import { useT } from '../i18n';
+import { ago } from './rain';
 
 export default function ConnectionBanner() {
-  const { source, loading } = useData();
+  const { source, loading, cachedAt } = useData();
+  const t = useT();
   if (loading || source === 'live') return null;
 
   return (
     <View style={styles.box}>
       <Feather name="wifi-off" size={15} color="#B45309" style={{ marginRight: 8 }} />
       <View style={{ flex: 1 }}>
-        <Text style={styles.t1}>Unable to connect to the server.</Text>
-        <Text style={styles.t2}>Showing the last data received. Reports and requests cannot be sent until you are back online.</Text>
+        <Text style={styles.t1}>{t('offline.banner')}{cachedAt ? '  ·  SAVED DATA (OFFLINE)' : ''}</Text>
+        <Text style={styles.t2}>{cachedAt ? t('offline.saved', { when: ago(new Date(cachedAt).toISOString()) }) : 'Reports and requests cannot be sent until you are back online.'}</Text>
       </View>
     </View>
   );

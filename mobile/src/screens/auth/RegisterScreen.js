@@ -32,7 +32,7 @@ export default function RegisterScreen({ goLogin }) {
   };
 
   return (
-    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.navy }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: 'transparent' }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={[styles.scroll, { paddingTop: insets.top + 36 }]} keyboardShouldPersistTaps="handled">
         <Image source={symbols.logo} style={styles.logo} />
         <Text style={styles.brand}>RiskN ResQ</Text>
@@ -45,7 +45,7 @@ export default function RegisterScreen({ goLogin }) {
           <Field label="PASSWORD" value={f.password} onChangeText={set('password')} secureTextEntry placeholder="At least 8 characters" />
           <Field label="CONFIRM PASSWORD" value={f.confirm} onChangeText={set('confirm')} secureTextEntry placeholder="Repeat your password" onSubmitEditing={submit} />
           <View style={{ marginTop: 6 }}>
-            <ActionButton variant="primary" label={busy ? 'CREATING…' : 'CREATE ACCOUNT'} disabled={busy} onPress={submit} />
+            <ActionButton variant="primary" label={busy ? 'CREATING…' : 'CREATE ACCOUNT'} loading={busy} onPress={submit} />
           </View>
           <Pressable onPress={goLogin} style={{ marginTop: 18, alignItems: 'center' }} hitSlop={8}>
             <Text style={styles.link}>Already have an account? <Text style={{ fontFamily: fonts.bold, color: colors.primary }}>Log in</Text></Text>

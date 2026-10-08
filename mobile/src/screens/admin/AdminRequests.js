@@ -1,7 +1,8 @@
 import React from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import Header from '../../components/Header';
-import { Card, ErrorText, Pill, statusColor } from '../../components/ui';
+import { Card, ErrorText, Pill, StateView, statusColor } from '../../components/ui';
+import { FadeIn, staggerDelay } from '../../components/motion';
 import usePolling from '../../hooks/usePolling';
 import { getHelpRequests, getMatches } from '../../services/accountApi';
 import { timeAgo } from '../../services/geo';
@@ -15,20 +16,22 @@ export default function AdminRequests() {
     <View style={{ flex: 1 }}>
       <Header title="Requests" subtitle="Help requests and volunteer matches" />
       <ScrollView contentContainerStyle={styles.body}>
-        <ErrorText>{reqs.error || matches.error}</ErrorText>
+        {reqs.data == null && reqs.error ? <StateView kind="error" title="Unable to load help requests." message={reqs.error} onRetry={reqs.reload} /> : <ErrorText>{reqs.error || matches.error}</ErrorText>}
+        {reqs.data == null && !reqs.error ? <StateView kind="loading" /> : null}
         <Text style={styles.section}>Help requests ({(reqs.data || []).length})</Text>
-        {reqs.data && reqs.data.length === 0 && <Text style={styles.line}>No help requests.</Text>}
-        {(reqs.data || []).map((r) => (
-          <Card key={r.id}>
+        {reqs.data && reqs.data.length === 0 && <StateView kind="empty" compact icon="life-buoy" title="No help requests yet." message="Requests from people in the area appear here with their status and volunteer." />}
+        {(reqs.data || []).map((r, i) => (
+          <FadeIn key={r.id} delay={staggerDelay(i, 50, 300)}><Card>
             <View style={styles.rowBetween}>
               <Text style={styles.title}>{prettyResource(r.type)} · #{r.id}</Text>
               <Pill text={r.status} color={statusColor(r.status)} />
             </View>
-            <Text style={styles.line}>Priority {r.priority} · user #{r.user_id} · {timeAgo(r.created_at)}</Text>
-          </Card>
+            <Text style={styles.line}>Priority {r.priority} · {r.requester_name || `user #${r.user_id}`}{r.requester_phone ? ` (${r.requester_phone})` : ''} · {timeAgo(r.created_at)}</Text>
+            {r.volunteer_name ? <Text style={styles.line}>Volunteer: {r.volunteer_name}{r.match_status ? ` (${r.match_status.toLowerCase()})` : ''}</Text> : null}
+          </Card></FadeIn>
         ))}
         <Text style={styles.section}>Matches ({(matches.data || []).length})</Text>
-        {matches.data && matches.data.length === 0 && <Text style={styles.line}>No matches yet.</Text>}
+        {matches.data && matches.data.length === 0 && <StateView kind="empty" compact icon="link" title="No matches yet." />}
         {(matches.data || []).map((m) => (
           <Card key={m.id}>
             <View style={styles.rowBetween}>

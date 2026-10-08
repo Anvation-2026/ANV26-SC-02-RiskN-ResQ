@@ -43,31 +43,51 @@ def _key(lat: float, lng: float) -> str:
     return f"grid:{lat:.4f},{lng:.4f}"
 
 
+def _status(name, ok, error=None, detail=""):
+    try:
+        import intel_jobs
+        intel_jobs.set_status(name, ok, error, detail)
+    except Exception:
+        pass
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def store(c, observations: list, source: str) -> None:
+def low_lying_threshold(elevations: list):
+    """Elevation at the 25th percentile of the monitored area: cells at or below it count as low-lying (flood-prone)."""
+    vals = sorted(e for e in elevations if e is not None)
+    return vals[max(0, int(len(vals) * 0.25) - (1 if len(vals) % 4 == 0 else 0))] if len(vals) >= 4 else None
+
+
+def store(c, observations: list, source: str, elevations: dict | None = None) -> None:
     """One row per grid cell, updated in place (the previous reading is kept alongside), so the table never grows."""
     t = _now()
     for o in observations:
         key = _key(o.latitude, o.longitude)
         rate = float(o.rainfall_intensity_mm_per_hour or 0.0)
         old = c.execute("SELECT rainfall, updated_at FROM environment_data WHERE zone=?", (key,)).fetchone()
-        values = (rate, rain_level(rate), o.rainfall_24h_mm, o.observed_at, o.weather_code, t, source)
+        values = (rate, rain_level(rate), o.rainfall_24h_mm, o.observed_at, o.weather_code, t, source,
+                  o.forecast_peak_mm, o.forecast_peak_in_h, o.rain_1h_mm, o.rain_3h_mm, o.rain_6h_mm, o.forecast_3h_mm, o.forecast_6h_mm)
+        elev = (elevations or {}).get(key)
         if old:
             c.execute("UPDATE environment_data SET rainfall=?, rain_level=?, rainfall_24h=?, observed_at=?, weather_code=?, "
-                      "updated_at=?, data_source=?, prev_rainfall=?, prev_at=? WHERE zone=?",
-                      values + (old["rainfall"], old["updated_at"], key))
+                      "updated_at=?, data_source=?, forecast_peak_mm=?, forecast_peak_in_h=?, rain_1h=?, rain_3h=?, rain_6h=?, "
+                      "forecast_3h_mm=?, forecast_6h_mm=?, prev_rainfall=?, prev_at=?, "
+                      "elevation=COALESCE(?, elevation) WHERE zone=?",
+                      values + (old["rainfall"], old["updated_at"], elev, key))
         else:
             c.execute("INSERT INTO environment_data(rainfall, rain_level, rainfall_24h, observed_at, weather_code, updated_at, "
-                      "data_source, zone, latitude, longitude) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                      values + (key, o.latitude, o.longitude))
+                      "data_source, forecast_peak_mm, forecast_peak_in_h, rain_1h, rain_3h, rain_6h, forecast_3h_mm, forecast_6h_mm, "
+                      "zone, latitude, longitude, elevation) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                      values + (key, o.latitude, o.longitude, elev))
 
 
 def feed_risk_engine(c, observations: list, source: str) -> None:
-    """Give each risk zone the real 24h rainfall of its nearest grid cell, then let the existing engine re-score it
-    (and raise/clear its alert). Zones under an admin drill (SIMULATED) are left alone until the admin resets."""
+    """Give each risk zone the real 24 h rainfall of its nearest grid cell (used by the drill/legacy path and as its
+    data-source label), then recompute the flood intelligence for every cell, which also re-scores zones and alerts.
+    Zones under an admin drill (SIMULATED) are left alone until the admin resets."""
     if not observations:
         return
     for zone, (zla, zlo) in db.ZONES.items():
@@ -79,7 +99,8 @@ def feed_risk_engine(c, observations: list, source: str) -> None:
             continue  # zone lies outside the monitored area
         c.execute("UPDATE environment_data SET rainfall=?, updated_at=?, data_source=? WHERE zone=?",
                   (near.rainfall_24h_mm, _now(), source, zone))
-        refresh_zone(c, zone)
+    import flood_intel
+    flood_intel.recompute_all(c)
 
 
 async def refresh(provider) -> dict:
@@ -90,18 +111,34 @@ async def refresh(provider) -> dict:
     _state["refreshing"] = True
     _state["last_attempt"] = _now()
     try:
-        observations = await provider.get_weather_grid(grid_points())
+        points = grid_points()
+        observations = await provider.get_weather_grid(points)
         source = provider.get_source_name()
         with db.session() as c:
             store(c, observations, source)
             feed_risk_engine(c, observations, source)
+            record_history(c, observations)
         _state["last_error"] = None
+        _status("weather", True, detail=f"{len(observations)} grid points from {source}")
     except Exception as exc:
-        _state["last_error"] = f"{type(exc).__name__}"
+        import intel_jobs
+        _state["last_error"] = intel_jobs.why(exc)
         logger.warning("Weather refresh failed: %s", exc)
+        _status("weather", False, intel_jobs.why(exc), "Weather data unavailable; showing the last known readings as stale")
     finally:
         _state["refreshing"] = False
     return status()
+
+
+def record_history(c, observations: list) -> None:
+    """One summary row per refresh (kept 7 days) so the admin can chart rainfall over time."""
+    if not observations:
+        return
+    rates = [float(o.rainfall_intensity_mm_per_hour or 0.0) for o in observations]
+    c.execute("INSERT INTO weather_history(at, monitored, heavy, max_mm, avg_mm) VALUES(?,?,?,?,?)",
+              (_now(), len(rates), sum(1 for r in rates if rain_level(r) in ("HEAVY", "VERY_HEAVY")), max(rates), round(sum(rates) / len(rates), 3)))
+    cutoff = (datetime.now(timezone.utc).timestamp() - 7 * 86400)
+    c.execute("DELETE FROM weather_history WHERE at < ?", (datetime.fromtimestamp(cutoff, timezone.utc).isoformat(timespec="seconds"),))
 
 
 def _age_seconds(iso: str):
@@ -121,8 +158,13 @@ def status() -> dict:
     locations = [{
         "latitude": r["latitude"], "longitude": r["longitude"],
         "rainfall_mm": r["rainfall"], "rainfall_period": "1h", "rainfall_24h_mm": r["rainfall_24h"],
+        "rain_1h_mm": r["rain_1h"], "rain_3h_mm": r["rain_3h"], "rain_6h_mm": r["rain_6h"],
+        "forecast_3h_mm": r["forecast_3h_mm"], "forecast_6h_mm": r["forecast_6h_mm"],
         "rain_level": r["rain_level"] or rain_level(r["rainfall"]),
         "previous_rainfall_mm": r["prev_rainfall"], "weather_code": r["weather_code"],
+        "forecast_peak_mm": r["forecast_peak_mm"], "forecast_peak_in_h": r["forecast_peak_in_h"],
+        "forecast_level": rain_level(r["forecast_peak_mm"]) if r["forecast_peak_mm"] is not None else None,
+        "elevation_m": r["elevation"],
         "timestamp": r["observed_at"] or r["updated_at"], "updated_at": r["updated_at"], "source": r["data_source"],
     } for r in rows]
     updated_at = max((r["updated_at"] for r in rows), default=None)
@@ -137,10 +179,11 @@ def status() -> dict:
         "last_error": _state["last_error"],
         "refresh_interval_seconds": config.WEATHER_REFRESH_INTERVAL,
         "message": ("Weather data unavailable" if state == "unavailable"
-                    else f"Last updated {max(1, (age or 0) // 60)} min ago" if stale else None),
+                    else f"STALE DATA: last updated {max(1, (age or 0) // 60)} min ago" if stale else None),
         "summary": {
             "monitored_locations": len(locations), "heavy_rain_locations": len(heavy),
             "highest_rainfall_mm": max((l["rainfall_mm"] for l in locations), default=0.0),
+            "forecast_heavy_locations": sum(1 for l in locations if l["forecast_level"] in ("HEAVY", "VERY_HEAVY")),
         },
         "thresholds_mm_per_hour": {"moderate": config.RAIN_MODERATE_THRESHOLD, "heavy": config.HEAVY_RAIN_THRESHOLD,
                                    "very_heavy": config.RAIN_VERY_HEAVY_THRESHOLD},

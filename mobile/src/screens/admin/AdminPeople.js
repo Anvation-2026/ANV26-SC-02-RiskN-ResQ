@@ -3,7 +3,7 @@ import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Switch, Text, V
 import Header from '../../components/Header';
 import ActionButton from '../../components/ActionButton';
 import { Chip } from '../ReportScreen';
-import { Card, ErrorText, Field, Label, Pill, Segmented, SmallButton, statusColor } from '../../components/ui';
+import { Card, ErrorText, Field, Label, Pill, Segmented, SmallButton, statusColor, ConfirmDialog } from '../../components/ui';
 import { errorText } from '../../context/AuthContext';
 import usePolling from '../../hooks/usePolling';
 import { createVolunteer, disableVolunteer, getAdminUsers, getVolunteersFull, setUserActive, updateVolunteer } from '../../services/accountApi';
@@ -14,6 +14,8 @@ const SKILLS = ['MEDICINE', 'FOOD', 'WATER', 'FIRST_AID', 'EVACUATION'];
 const BLANK = { name: '', email: '', phone: '', password: '', skill: 'MEDICINE', latitude: '12.9716', longitude: '77.5946', available: true };
 
 export default function AdminPeople() {
+  const [confirm, setConfirm] = React.useState(null);
+  const ask = (title, message, confirmLabel, action) => setConfirm({ title, message, confirmLabel, action });
   const [tab, setTab] = useState('volunteers');
   const vols = usePolling(getVolunteersFull, 8000);
   const users = usePolling(getAdminUsers, 8000);
@@ -87,7 +89,7 @@ export default function AdminPeople() {
                   <View style={{ flexDirection: 'row', gap: 8 }}>
                     <SmallButton label="Edit" outline onPress={() => edit(v)} />
                     {v.status === 'ACTIVE'
-                      ? <SmallButton label="Disable" color={colors.HIGH} disabled={busy} onPress={() => run(() => disableVolunteer(v.id))} />
+                      ? <SmallButton label="Disable" color={colors.HIGH} disabled={busy} onPress={() => ask(`Disable ${v.name}?`, 'They are signed out, cannot log in, and any open request assigned to them returns to the queue. You can enable them again later.', 'Disable account', () => run(() => disableVolunteer(v.id)))} />
                       : <SmallButton label="Enable" color={colors.LOW} disabled={busy} onPress={() => run(() => updateVolunteer(v.id, { status: 'ACTIVE' }))} />}
                   </View>
                 </View>
@@ -107,13 +109,15 @@ export default function AdminPeople() {
               <Pill text={u.is_active ? 'ACTIVE' : 'DISABLED'} color={statusColor(u.is_active ? 'ACTIVE' : 'DISABLED')} />
               {u.role !== 'admin' && (
                 <SmallButton label={u.is_active ? 'Disable' : 'Enable'} color={u.is_active ? colors.HIGH : colors.LOW} disabled={busy}
-                  onPress={() => run(() => setUserActive(u.id, !u.is_active))} />
+                  onPress={() => (u.is_active ? ask(`Disable ${u.name}?`, 'They are signed out and cannot log in until you enable the account again.', 'Disable account', () => run(() => setUserActive(u.id, false))) : run(() => setUserActive(u.id, true)))} />
               )}
             </View>
           </Card>
         ))}
       </ScrollView>
       </KeyboardAvoidingView>
+      <ConfirmDialog visible={!!confirm} title={confirm && confirm.title} message={confirm && confirm.message} confirmLabel={confirm && confirm.confirmLabel} danger busy={busy}
+        onCancel={() => setConfirm(null)} onConfirm={async () => { const a = confirm.action; setConfirm(null); await a(); }} />
     </View>
   );
 }

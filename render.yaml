@@ -1,0 +1,36 @@
+# One-click deploy on Render (https://render.com): a web service plus a managed PostgreSQL database.
+# Secrets marked sync:false are entered in the Render dashboard, never stored in git.
+databases:
+  - name: riskn-db
+    plan: free
+    databaseName: risknresq
+services:
+  - type: web
+    name: riskn-resq-api
+    runtime: docker
+    rootDir: backend
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase: { name: riskn-db, property: connectionString }
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_NAME
+        value: Super Admin
+      - key: CORS_ORIGINS        # your web address (the phone app does not need CORS); empty = no browser origin allowed
+        sync: false
+      - key: TRUST_PROXY
+        value: "1"
+      - key: CLOUDINARY_URL
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SENTRY_DSN
+        sync: false

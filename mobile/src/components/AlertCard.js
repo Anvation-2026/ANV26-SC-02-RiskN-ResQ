@@ -4,6 +4,7 @@ import Feather from '@expo/vector-icons/Feather';
 import { colors, radius, riskColor, shadow } from '../theme';
 import { timeAgo } from '../services/geo';
 import ActionButton from './ActionButton';
+import { ago } from './rain';
 
 const Field = ({ label, value }) => (
   <View style={styles.field}>
@@ -19,12 +20,14 @@ export default function AlertCard({ alert, road, onViewRoute }) {
   const area = alert.affected_zone || alert.zone || 'Monitored area';
   const roadText = alert.affected_road || road || 'None reported';
   const when = timeAgo(alert.created_at || alert.createdAt);
+  const satellite = /^(SIMULATED DRILL[^:]*: )?Satellite-detected water expansion/i.test(alert.message || '');
+  const sources = Array.isArray(alert.sources) ? alert.sources.filter((x) => x.source) : [];
 
   return (
     <View style={[styles.card, { borderLeftColor: c }, urgent && { backgroundColor: c + '0D', borderColor: c + '55' }]}>
       <View style={styles.headerRow}>
         <Feather name={urgent ? 'alert-octagon' : 'alert-circle'} size={16} color={c} style={{ marginRight: 6 }} />
-        <Text style={[styles.title, { color: c }]}>{level} FLOOD RISK</Text>
+        <Text style={[styles.title, { color: c }]}>{satellite ? 'SATELLITE WATER CHANGE' : `${level} FLOOD RISK`}</Text>
         {alert.drill ? (
           <View style={styles.drill}><Text style={styles.drillText}>SIMULATED</Text></View>
         ) : null}
@@ -34,6 +37,9 @@ export default function AlertCard({ alert, road, onViewRoute }) {
 
       <View style={styles.fields}>
         {alert.reason ? <Field label="Reason" value={alert.reason} /> : null}
+        {alert.probability != null ? <Field label="Flood probability" value={`${Math.round(alert.probability * 100)}% (prototype estimate)`} /> : null}
+        {alert.recommended_action ? <Field label="Recommended action" value={alert.recommended_action} /> : null}
+        {sources.length ? <Field label="Data sources" value={sources.map((x) => `${x.source}${x.observed_at ? ` (${ago(x.observed_at)})` : ''}`).join('; ')} /> : null}
         <Field label="Affected Area" value={area} />
         <Field label="Affected Road" value={roadText} />
         <Field label="Updated" value={when} />

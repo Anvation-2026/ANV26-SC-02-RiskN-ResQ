@@ -58,7 +58,8 @@ def test_endpoint_reports_heavy_rain_without_calling_it_a_flood(client):
     asyncio.run(wm.refresh(FakeProvider(rate=9.0, total=40.0)))
     body = client.get("/weather/monitoring").json()
     assert body["status"] == "ok" and body["source"] == "Open-Meteo"
-    assert body["summary"] == {"monitored_locations": 25, "heavy_rain_locations": 25, "highest_rainfall_mm": 9.0}
+    assert {k: body["summary"][k] for k in ("monitored_locations", "heavy_rain_locations", "highest_rainfall_mm")} == \
+        {"monitored_locations": 25, "heavy_rain_locations": 25, "highest_rainfall_mm": 9.0}
     assert {l["rain_level"] for l in body["locations"]} == {"HEAVY"}
     assert "flood" not in str(body).lower()
 
@@ -101,7 +102,7 @@ def test_failure_keeps_last_data_labelled_and_invents_nothing(client, monkeypatc
     with db.session() as c:
         c.execute("UPDATE environment_data SET updated_at='2020-01-01T00:00:00+00:00' WHERE zone LIKE 'grid:%'")
     stale = client.get("/weather/monitoring").json()
-    assert stale["status"] == "stale" and stale["stale"] and "Last updated" in stale["message"]
+    assert stale["status"] == "stale" and stale["stale"] and stale["message"].startswith("STALE DATA: last updated")
 
 
 def test_unavailable_when_provider_never_worked(client, monkeypatch):

@@ -1,7 +1,8 @@
 import React from 'react';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, StyleSheet, Text, View } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import { colors, radius, shadow } from '../theme';
+import { PressableScale } from './motion';
 
 // variant "tile" = quick-action tile in 2-column grid; "primary" = full-width CTA button
 export default function ActionButton({
@@ -13,29 +14,33 @@ export default function ActionButton({
   variant = 'tile',
   color = colors.primary,
   disabled,
+  loading,
 }) {
   if (variant === 'primary') {
+    const off = disabled || loading;
     return (
-      <Pressable
+      <PressableScale
         onPress={onPress}
-        disabled={disabled}
-        style={({ pressed }) => [
-          styles.primary,
-          { backgroundColor: color, opacity: disabled ? 0.5 : pressed ? 0.85 : 1 },
-        ]}
+        disabled={off}
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        accessibilityState={{ disabled: !!off, busy: !!loading }}
+        style={[styles.primary, { backgroundColor: color, opacity: disabled ? 0.5 : 1, flexDirection: 'row', gap: 8 }]}
       >
+        {loading ? <ActivityIndicator size="small" color="#FFFFFF" /> : null}
         <Text style={styles.primaryText}>{label}</Text>
-      </Pressable>
+      </PressableScale>
     );
   }
 
   return (
-    <Pressable
+    <PressableScale
       onPress={onPress}
-      style={({ pressed }) => [
-        styles.tile,
-        pressed && { opacity: 0.85, transform: [{ scale: 0.98 }] },
-      ]}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      containerStyle={{ flexGrow: 1, flexBasis: 96, maxWidth: '100%' }}
+      scaleTo={0.96}
+      style={styles.tile}
     >
       <View style={[styles.iconWrapper, image ? styles.imageWrapper : { backgroundColor: color + '15' }]}>
         {image ? (
@@ -47,13 +52,13 @@ export default function ActionButton({
         )}
       </View>
       <Text style={styles.label} numberOfLines={2}>{label}</Text>
-    </Pressable>
+    </PressableScale>
   );
 }
 
 const styles = StyleSheet.create({
   tile: {
-    flex: 1,
+    alignSelf: 'stretch',
     backgroundColor: colors.card,
     borderRadius: radius.card,
     paddingVertical: 14,

@@ -34,6 +34,8 @@ export interface Road {
   name: string;
   status: RoadStatus;
   reason: string | null;
+  /** Optional 0-100 flood-risk estimate for this road; raises its routing cost but never excludes it (only BLOCKED does). */
+  riskScore?: number;
 }
 
 export interface RoadNode {
@@ -72,6 +74,11 @@ export interface Route {
   safetyNote: string;
   /** Optional geometry coordinates for polyline rendering */
   coordinates?: Location[];
+  /** Present when flood-risk estimates were used in the route cost */
+  riskInformation?: {
+    meanRiskScore: number;
+    potentiallyAffectedRoads: string[];
+  };
 }
 
 export type VolunteerAvailability = 'AVAILABLE' | 'UNAVAILABLE' | 'BUSY';

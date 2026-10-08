@@ -1,301 +1,119 @@
 # RiskN ResQ
 
-**Hyper-local flood early warning and community action network.**
-RiskN ResQ tells people in a neighbourhood how likely a flood is right now, warns them when risk rises, shows which roads are blocked, suggests an alternative route, and connects people who need help with nearby volunteers.
+Hyper-local flood early warning and community response. A FastAPI + PostgreSQL backend and a React Native (Expo) app that runs on phones and in the browser.
 
-Built for a 2-hour hackathon. The MVP hazard is **flood**.
+> **Status of claims:** the flood-risk model is a **prototype rule-based estimate**, not a validated prediction. Read [docs/CLAIMS_AND_LIMITS.md](docs/CLAIMS_AND_LIMITS.md) for exactly what is real, what is a prototype, what is simulated and what has not been tested on hardware.
 
-## What it does
+## 1. Problem
+During urban floods people learn about danger late (a road is already under water), warnings are city-wide instead of street-level, and help (medicine, water, evacuation) is arranged ad hoc. Official warnings rarely say *which roads* are affected or *who nearby can help*.
 
-| # | Feature | Where |
-|---|---|---|
-| 1 | Live **flood risk** per zone (0–100, LOW / MEDIUM / HIGH / CRITICAL) | Home |
-| 2 | Automatic **emergency alerts** when risk reaches HIGH or CRITICAL | Alerts |
-| 3 | **Blocked roads** and a **recommended alternative route** on a live map | Map |
-| 4 | **Report** a flood, blocked road or emergency (with a trust score) | Report |
-| 5 | **Request help** (medicine, food, water, first aid, evacuation) and get a **volunteer match** | Help |
-| 6 | **Hazard simulation** for demos: rainfall in, risk and alerts out | Demo panel / API |
+## 2. Solution
+RiskN ResQ combines **environmental evidence first** (rainfall, satellite water change, terrain, river level, rainfall history) with **community reports as secondary evidence**, explains every risk estimate, flags potentially affected roads, recommends routes around blocked and high-risk roads, and matches help requests to nearby volunteers.
 
-The app never claims a route is "safe". It says *"Recommended alternative route based on available incident data."*
-
-## Architecture
-
+## 3. Architecture
+```mermaid
+flowchart TD
+    W[Open-Meteo weather, terrain, river, history] --> J[Backend ingestion jobs]
+    S[Sentinel-1 radar via Planetary Computer] --> J
+    O[OpenStreetMap roads, hospitals, shelters] --> A[Admin imports]
+    J --> DB[(PostgreSQL cache with source + timestamp)]
+    A --> DB
+    DB --> E[Flood intelligence engine]
+    R[Verified community reports - capped, secondary] --> E
+    E --> H[Hotspots] & RR[Road risk] & AL[Automatic alerts] & HI[Risk history]
+    RR --> RT[Risk-aware routing - Dijkstra + provider routes]
+    E & H & RR & AL & RT --> API[FastAPI]
+    API --> APP[Expo app: user, volunteer, admin; phone + browser]
+    AL --> N[Push / SMS / email]
 ```
-┌──────────────────────┐   REST / JSON    ┌───────────────────────────┐
-│  mobile/ (Expo, RN)  │ ───────────────▶ │  backend/ (FastAPI)       │
-│  Home Map Report     │ ◀─────────────── │  Risk · Trust · Alerts    │
-│  Help Alerts         │   polls every 4s │  Roads · Simulation       │
-│  + mock-data fallback│                  │  PostgreSQL (auto-seeded) │
-└──────────────────────┘                  └───────────────────────────┘
-```
+**Phones never call weather or satellite services.** The backend fetches on a schedule, stores results, and the app reads processed results (`GET /intelligence/overview`). More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/FLOOD_INTELLIGENCE.md](docs/FLOOD_INTELLIGENCE.md).
 
-- **Backend:** Python, FastAPI, **PostgreSQL** (SQLite still works for quick local runs), Pydantic. Deterministic rules, no ML. Login with roles.
-- **Frontend:** React Native with Expo (JavaScript). If the backend is unreachable the app falls back to built-in demo data and shows *"Unable to connect to live data."*
-- **Map:** drawn from real road coordinates without a map SDK, so nothing extra to set up.
+## 4. Technology
+Backend: Python 3.12+, FastAPI, Pydantic v2, PostgreSQL 16 (psycopg 3; SQLite for quick demos/tests), httpx. App: React Native 0.86 + Expo SDK 57, react-native-web, `react-native-maps` on phones, Leaflet + OpenStreetMap in the browser, expo-location / image-picker / notifications / secure-store. Tests: pytest, Jest (ts-jest), Playwright. Optional: Cloudinary, Twilio, SMTP, Sentry.
 
-## Accounts and roles
+## 5. Data sources (all free, no API key)
+| Signal | Source |
+|---|---|
+| Rainfall 1/3/6/24 h + 6 h forecast | Open-Meteo forecast API, polled by the backend every 15 min for a 25-point grid |
+| Satellite water change | Sentinel-1 radar (Microsoft Planetary Computer STAC + statistics API); Sentinel-2 NDWI as optical fallback |
+| Terrain | Copernicus DEM 90 m via Open-Meteo (elevation, slope, depression) |
+| River level | GloFAS **modelled** river discharge via Open-Meteo Flood API (no gauges are connected) |
+| Rainfall history | ERA5 reanalysis, 10 years of daily rain, via Open-Meteo archive |
+| Roads, hospitals, shelters | OpenStreetMap (Overpass), imported by an admin |
+| Routing | OSRM (free) or Google Routes if `GOOGLE_ROUTES_API_KEY` is set |
 
-Three roles, decided **only by the backend** (the app never sends a role):
+## 6. Real vs simulated data
+Normal operation uses real data only (accounts, reports, photos, requests, matches, road status, provider observations). Simulation exists only as an explicit admin drill: its rainfall is stored on the zone, labelled **SIMULATED DRILL** everywhere, never overwrites a real observation, never sends notifications, and *Reset* removes it. Offline data is labelled **SAVED DATA (OFFLINE)**, old provider data **STALE DATA**, missing data "... unavailable". See [docs/CLAIMS_AND_LIMITS.md](docs/CLAIMS_AND_LIMITS.md).
 
-| Role | How it is created | Can do |
-|---|---|---|
-| **user** | Anyone, via *Create Account* | View risk, alerts, map and blocked roads; request routes; report incidents; request help and see the match; manage their own session |
-| **volunteer** | **Only a Super Admin** (People → Add Volunteer) | Volunteer dashboard: set availability, see assigned requests and nearby open requests, accept and complete assigned requests |
-| **admin** (Super Admin) | From `ADMIN_EMAIL` / `ADMIN_PASSWORD` in the backend environment. There is no sign-up path | Admin dashboard: users, volunteers (add, edit, disable), incidents (verify, reject, resolve), roads (block, unblock), hazard simulation, alerts, help requests, matches, demo reset |
+## 7. Flood intelligence in one paragraph
+Per ~9 km grid cell the engine adds: rainfall (worst of 24 h, 1.5x 6 h, 4x 1 h) + forecast + abnormal satellite water gain (vs the median of three earlier passes on the same orbit; lakes and rivers are in the baseline so are never flagged) + terrain susceptibility (only while it rains) + river level + rainfall-history context + a **capped** community-report term (reports alone can never exceed MEDIUM). Missing signals are listed and contribute nothing; with no usable weather the answer is "Insufficient data to estimate current flood risk." A potential **hotspot** needs HIGH risk and two independent signal families. Weights are documented and **not scientifically validated**; the probability is an uncalibrated mapping; the ML layer reports "not trained" until enough real labelled history exists. Full formulas and limits: [docs/FLOOD_INTELLIGENCE.md](docs/FLOOD_INTELLIGENCE.md).
 
-How it works: passwords are hashed with scrypt (never stored in plain text); login returns an opaque bearer token that is stored hashed and expires after 24 hours; logout revokes it; a disabled account is signed out immediately. Registration rejects any `role` field, so a normal user cannot become a volunteer or admin. Login is rate-limited after repeated failures (stored in the database, so a restart does not reset it). Public (no login): `/health`, `/risk`, `/alerts`, `/roads` and `/auth/register`, `/auth/login`. Everything else needs a valid token, and admin-only endpoints return `403` for other roles.
+## 8. Routing
+Candidate routes come from the real street network. Routes crossing a blocked road or a blocking incident are excluded (routes are densified so a long straight segment cannot slip past a closed road); the rest are ranked by `time x (1 + 0.6 x mean flood risk/100) x (1 + 0.1 per potentially-affected road)`. The geospatial module's Dijkstra uses the same risk-weighted cost when roads carry a risk score. Road states: `OPEN`, `POTENTIALLY_AFFECTED` (area-level estimate), `REPORTED_BLOCKED`, `VERIFIED_BLOCKED` (admin closure or verified incident). Wording is always "Recommended alternative route based on current environmental and incident data": never "safe".
 
-### Create the Super Admin
+## 9. Volunteer matching
+A help request (medicine, food, water, first aid, evacuation; with priority and quantity) is matched to the nearest available volunteer whose skill/resources fit, using the original distance-based matcher. Volunteers can also claim open requests. Status timeline and live ETA are shown to the requester; volunteers declare resource quantities that decrease on completion. Admins see demand, capacity and *suggested* standby positions (never an automatic dispatch).
 
+## 10. Roles
+| Role | Can |
+|---|---|
+| User (self-registers) | Home, map layers, report incidents with photos, request help, alerts, evacuation lookup, account, language (EN/HI/KN) |
+| Volunteer (created by admin) | Availability, location, requests, nearby requests, accept/complete, route and ETA |
+| Super Admin (from `.env`) | Everything above plus people, incident review, drill, road control, broadcast, intelligence, insights, CSV export, audit log, OSM imports, reset |
+
+Server-side checks on every endpoint; passwords scrypt-hashed; tokens and reset codes stored hashed; login lockout; per-IP rate limits; audit log of admin actions.
+
+## 11. Setup
+Prerequisites: Python 3.12+, Node 20+, PostgreSQL 16 (optional but recommended).
+
+### PostgreSQL
 ```bash
-cd backend
-cp .env.example .env     # .env is git-ignored; set your own ADMIN_EMAIL and ADMIN_PASSWORD (8+ characters)
+createdb risknresq                       # PostgreSQL must be running (macOS: brew services start postgresql@16)
+# backend/.env:  DATABASE_URL=postgresql://<user>:<password>@localhost:5432/risknresq   (Homebrew: your login name, no password)
 ```
+Tables, indexes and column upgrades are created automatically at start. Without `DATABASE_URL` a local SQLite file is used. Optional `DB_SCHEMA=name` runs inside an isolated PostgreSQL schema (staging, end-to-end tests).
 
-Never commit real credentials, and never put them in the mobile app.
+### Environment variables
+Names only (copy `backend/.env.example` to `backend/.env`; it is git-ignored):
+`DATABASE_URL`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_NAME`, `CORS_ORIGINS`, `TRUST_PROXY`, `APP_URL`, `GOOGLE_ROUTES_API_KEY`, `IMD_API_KEY`, `KSNDMC_API_KEY`, `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`, `SMTP_HOST/PORT/USER/PASSWORD/FROM`, `TWILIO_ACCOUNT_SID/AUTH_TOKEN/FROM`, `SENTRY_DSN`, `PUSH_ENABLED`, rate limits (`RATE_LIMIT_PER_MINUTE`, `AUTH_RATE_LIMIT_PER_MINUTE`), weather/intelligence tuning (`MONITORING_BOUNDS`, `GRID_SPACING`, `WEATHER_REFRESH_INTERVAL`, `HEAVY_RAIN_THRESHOLD`, `SATELLITE_*`, `SAR_WATER_THRESHOLD_DB`, `INTEL_ENABLED`, ...), `DEMO_DATA`. Only `ADMIN_*` and `DATABASE_URL` are needed to start. Mobile: `EXPO_PUBLIC_API_URL` (**required** for release builds), `GOOGLE_MAPS_API_KEY` (standalone native builds only).
 
-## Quick start
-
-### 1. Backend
-
+## 12. Run
 ```bash
-cd backend
-pip install -r requirements.txt
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-The admin account is created on startup from `backend/.env` (see *Accounts and roles*).
-
-API docs: <http://localhost:8000/docs>. The database (`resilienturban.db`) is created and seeded on first start. Call `POST /reset` to restore the seed data.
-
-### 2. Mobile app
-
-```bash
-cd mobile
-npm install
-npx expo start
-```
-
-Scan the QR code with **Expo Go** (phone and computer on the same Wi-Fi), press `i` for the iOS simulator, or press `w` for the browser.
-
-The app finds the backend automatically at `http://<your-computer-IP>:8000`. To point it elsewhere, set `API_URL_OVERRIDE` in [`mobile/src/config/api.js`](mobile/src/config/api.js).
-
-## Demo script
-
-1. Open the app. Risk is **LOW**.
-2. On Home, press **Flood Risk** in the *DEMO MODE* panel (or call `POST /simulate-hazard`).
-3. Risk becomes **HIGH**, an alert appears, and Road A is marked **BLOCKED**.
-4. Open **Map**: the blocked road and the recommended alternative route are shown.
-5. Open **Help**, choose *Medicine*, press **Request Help**: a volunteer match appears.
-6. Press **Normal** to reset.
-
-The demo panel is a development control. Set `DEMO_CONTROLS = false` in `mobile/src/config/api.js` to hide it.
-
-## Route & Resources (geospatial module)
-
-Added by Vishvanth, in `mobile/src/features/disaster-response/` (docs in `mobile/docs/`). On the **Map** tab, switch to **Route & Resources** to:
-
-1. See the user location, flood-risk zones and the geofence result (inside or outside, risk level).
-2. **Block** or **Unblock** a road (5th Cross) and **Reset Demo**.
-3. **Request a route**: Dijkstra routing excludes blocked roads and returns the distance, ETA and the reason for the detour.
-4. **Request a resource** (Medicine, Food, Water, First Aid, Evacuation): the explainable 100-point matcher returns the best available volunteer, or "No suitable nearby resource found."
-
-Blocking the demo road also blocks Road A on the backend (best effort), and the Help screen uses the same matching engine through `src/integration/volunteerAdapter.ts`.
-
-```bash
-cd mobile
-npx tsc --noEmit        # type check
-npx jest --runInBand    # 16 tests
-```
-
-## Volunteer portal
-
-Volunteers sign in on the same login screen; the backend decides the role and opens the volunteer portal (Home, Requests, Nearby, Map, Account). Volunteer accounts are created only by a Super Admin (People → Add Volunteer).
-
-- **Home:** availability (saved in the database; unavailable volunteers are never matched to new requests), assigned / nearby / completed counts, resource and location, and a "New help request assigned" banner plus a badge on the Requests tab when an assignment arrives.
-- **Requests:** active and completed requests, request details (priority, zone, distance, requester name and phone for assigned requests only), **Accept** and **Mark as completed**. Invalid steps (accepting twice, completing before accepting, touching someone else's request) are refused by the backend.
-- **Nearby:** open, unassigned requests that match the volunteer's skill or resources within 15 km, sorted by priority then distance; **Accept request** claims one (`POST /help-requests/{id}/claim`).
-- **Map:** the app's existing map with your location, the requests (high priority marked), blocked roads and a recommended route to the selected request ("Recommended route based on available incident data."). If location is unavailable the portal still works and says so; "Update from my GPS" saves the phone's position.
-- A user sees the real status of their own requests under **Help → My requests**; the admin sees everything under **Requests**.
-
-## Photos, weather and storage
-
-- **Weather:** `GET /weather?latitude=&longitude=` returns the current rainfall and its source (Open-Meteo by default). The existing risk engine builds the risk score from the same provider, together with credible reports; the weather alone never declares a flood.
-- **Cloudinary (incident photos):** set `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY` and `CLOUDINARY_API_SECRET` in `backend/.env`. The app sends the photo to the backend, the backend uploads it (signed, the secret never leaves the server) and PostgreSQL stores only the image URL. Photos are served to the reporter and admins through an authorised redirect to a resized copy. Without those variables the backend keeps photos on its own disk. If Cloudinary is unreachable the report is still saved and the app says the photo could not be stored.
-- **Environment files:** `backend/.env.example` and `mobile/.env.example` list every variable. Only `EXPO_PUBLIC_API_URL` belongs in the mobile app; database URLs, the Cloudinary secret and the admin password stay on the backend.
-
-## Real data and demo data
-
-Normal operation uses **real data only**, stored in PostgreSQL: accounts, volunteers, incident reports (and their photos), help requests, matches, road status and alerts. Nothing is created automatically: a fresh database contains just the Super Admin from `.env`, the road network (reference data) and zone baselines. The app has **no built-in sample or mock data and no silent fallback**: if the server cannot be reached it says "Unable to connect to the server." and keeps showing the last data it received.
-
-Demo data is opt-in for presentations: start the backend with `DEMO_DATA=true` to also seed a sample volunteer roster (no login accounts) and one sample incident. Remove it again at any time with `python scripts/remove_demo_data.py` (real accounts and records are never touched). Admin-simulated rainfall is always labelled SIMULATED and its alerts start with "SIMULATED DRILL". The admin *Reset Demo* button clears incidents, help requests, matches and alerts and unblocks roads; accounts are kept.
-
-Anything saved by one device is visible to the others: for example a user registered on a phone shows up in the admin's People list, and an incident reported on a phone shows up in the admin's Incidents list, because every device talks to the same backend and PostgreSQL database.
-
-## Database (PostgreSQL)
-
-The backend uses **PostgreSQL** when `DATABASE_URL` points at it, and a local SQLite file when it does not (quick demos, tests). The tables are created and the demo data seeded automatically on first start.
-
-```bash
-# 1. create the database (PostgreSQL must be running)
-createdb risknresq
-
-# 2. tell the backend about it, in backend/.env (git-ignored):
-#    DATABASE_URL=postgresql://<user>:<password>@localhost:5432/risknresq
-#    (on a Mac with Homebrew PostgreSQL the user is your login name and no password is needed)
-
-# 3. install the driver and start the backend
+# backend (creates the Super Admin from ADMIN_EMAIL / ADMIN_PASSWORD on first start)
 cd backend && pip install -r requirements.txt
-python3 -m uvicorn main:app --host 0.0.0.0 --port 8000
+python -m uvicorn main:app --host 0.0.0.0 --port 8000
+python scripts/refresh_intelligence.py        # optional: run every data job once now and print provider status
+
+# app (browser)               # phone (Expo Go): same machine and Wi-Fi, the app finds the backend automatically
+cd mobile && npm install
+npx expo start --web --port 8082     # or: npx expo start
 ```
+Optional: `scripts/clean_test_data.py` (reset runtime data), `scripts/integrity_check.py` (orphaned references), `scripts/backup_db.sh` (pg_dump), `python scripts/remove_demo_data.py`.
 
-Already have data in the old SQLite file? Copy it once into PostgreSQL (this empties the target tables first):
-
+## 13. Tests
 ```bash
-cd backend && DATABASE_URL=postgresql://<user>@localhost:5432/risknresq python scripts/migrate_sqlite_to_postgres.py
+cd backend && python -m pytest -q                                              # SQLite
+cd backend && RISKNRESQ_TEST_BACKEND=postgres python -m pytest -q              # PostgreSQL (temporary schema per test; needs DATABASE_URL)
+cd mobile  && npx tsc --noEmit && npx jest --runInBand && npx expo-doctor
+cd mobile  && npx expo export --platform ios --output-dir /tmp/x && npx expo export --platform android --output-dir /tmp/y
+# browser end-to-end (isolated backend: own schema/database file and test admin; real providers)
+cd backend && scripts/e2e_backend.sh start && scripts/e2e_backend.sh bootstrap
+cd mobile  && npx playwright install chromium && npx playwright test
+cd backend && python scripts/persistence_check.py                              # records survive backend restarts; reset keeps accounts
 ```
+CI (`.github/workflows/ci.yml`) runs the backend suite on SQLite and PostgreSQL, the mobile checks and the browser E2E.
 
-Tests run on a throw-away SQLite file by default. To run the same suite on PostgreSQL (each test gets its own temporary schema), create a test database first:
+## Device testing
+`docs/DEVICE_TEST_CHECKLIST.md` is the step-by-step procedure for a real iPhone/Android, and **Account > Device & connection check** inside the app reports server reachability, GPS, camera, notifications and secure storage as measured on the phone.
 
-```bash
-createdb risknresq_test
-RISKNRESQ_TEST_BACKEND=postgres DATABASE_URL=postgresql://<user>@localhost:5432/risknresq_test python -m pytest -q
-```
+## 14. Deployment
+See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md): Render blueprint (`render.yaml`: Docker web service + managed PostgreSQL), HTTPS, `TRUST_PROXY`, `CORS_ORIGINS`, EAS Android builds with `EXPO_PUBLIC_API_URL`, push notifications, backups.
 
-## Running on a real phone (Expo Go)
+## 15. Demo flow (5-10 minutes)
+See [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md). Short version: Home (real weather, explained risk) -> Map (layers, satellite change, evacuation route) -> Admin *Guided demo* (SIMULATED DRILL) -> alert -> road blocked -> alternative route -> help request -> volunteer accepts -> admin history, Insights, CSV, audit log.
 
-1. Phone and computer on the **same Wi-Fi**. Start the backend so it listens on the network: `uvicorn main:app --host 0.0.0.0 --port 8000`.
-2. In `mobile/`: `npm install`, then `npx expo start`, and scan the QR code with **Expo Go**.
-3. The app finds the backend automatically at `http://<your-computer-IP>:8000` (it reuses the address Expo was started on). To point somewhere else, set an environment variable instead of editing code: `EXPO_PUBLIC_API_URL=http://192.168.1.20:8000 npx expo start` (use an `https://` URL for a deployed backend).
-4. Do not use `localhost` on a phone: it means the phone itself.
+## 16. Known limitations
+Prototype risk weights; ~9 km risk cells; Sentinel-1 passes every 6-12 days; no river gauges or official flood ground truth connected; ML untrained; sparse OpenStreetMap shelters; Open-Meteo free-tier daily limit; admin/volunteer screens English only; **nothing has been verified on a physical phone** (native maps, camera, GPS, push, Cloudinary, SMS/email delivery). Details in [docs/CLAIMS_AND_LIMITS.md](docs/CLAIMS_AND_LIMITS.md).
 
-Permissions are declared in `app.json`: location (when in use), camera and photo library (for incident photos). The app currently uses a fixed demo location (Bengaluru) so the demo is repeatable; set `USE_DEVICE_LOCATION = true` in `mobile/src/config/api.js` to use the phone's GPS.
-
-**Status:** the iOS and Android bundles compile (`npx expo export`), and the whole app has been exercised in a browser at phone size. Testing on a physical phone is still to be done by the team.
-
-### Native map
-
-On phones the map uses `react-native-maps` (`MapView.js`): flood-risk zones, blocked roads, the recommended route (computed with blocked roads removed), incidents and volunteers. It works in **Expo Go** without a key. A standalone Android/iOS build needs a Google Maps key, supplied through the environment (never committed): `GOOGLE_MAPS_API_KEY=... npx expo start` (read by `mobile/app.config.js`). In the browser the app uses a simple built-in map (`MapView.web.js`) because `react-native-maps` does not run on web.
-
-### Incident photos
-
-On the Report screen, *Choose photo* (and *Take photo* on phones) shows a preview. When the report is submitted the app first saves the incident, then uploads the image to `POST /incidents/{id}/photo`. The app only says "Photo uploaded" after the server confirms it stored the file; if the upload fails it says so, and the report itself is still saved. The backend checks the file's real type (JPEG, PNG or WebP) and size (5 MB), keeps one photo per incident, stores it under `backend/uploads/` (git-ignored, cleared by Reset) and shows it only to the reporter and admins. Local disk storage is for the demo; use object storage for production.
-
-### Password recovery
-
-**Not included in this hackathon scope.** A safe reset flow needs email delivery, which is not set up, so there is no "Forgot password" button. An admin can set a new password for a volunteer from People → Edit.
-
-### HTTPS and deployment
-
-Nothing is deployed, and **HTTPS is not configured**. Local development uses plain HTTP on your Wi-Fi, so only test accounts should be used there. For a real deployment, put the backend behind a host or reverse proxy that provides HTTPS and set `EXPO_PUBLIC_API_URL` to the `https://` address. Admin credentials live only in `backend/.env` on the server and never in the app.
-
-### Data labels
-
-The Home screen shows where the risk comes from (for example the weather provider) and a LIVE or OFFLINE badge for the server connection. Anything an admin sets with the **Simulate hazard** control is stored as `SIMULATED`: the Admin dashboard and risk API say so, and the alerts it creates start with "SIMULATED DRILL (not a real warning)". Simulated rainfall drives the zone alerts and admin views; the Home risk card for a phone's GPS position uses real weather data, so it is not changed by a simulation. This prototype is not an official warning service.
-
-### Logo and symbols
-
-The logo and 15 symbols are in `mobile/assets/symbols/` (SVG sources plus `png/` renders). The logo is the app icon, splash, browser-tab icon and login screen header. Symbols used in the app: pin (Live Map), alternative route (Route), alert wave (Report), lifebuoy (Help), alert bell (Alerts), barricade (Road status), risk gauge (Risk), rain cloud (Hazard simulation). Home, Account, Logout, Admin and Settings have no matching symbol, so they keep the standard icon set.
-
-## How the logic works
-
-- **Risk score:** rainfall below 20 mm is LOW, 20–60 MEDIUM, 60–100 HIGH, above 100 CRITICAL. Verified (or credible) flood and blocked-road reports in the zone add up to 25 points. Score thresholds: 25 / 50 / 75.
-- **Trust score:** starts at 50, +15 if a similar report (same type, within 500 m and 3 h) exists, +25 when an admin verifies it, −5 per hour after 6 h, 0 if rejected.
-- **Alerts:** created or upgraded when a zone is HIGH or CRITICAL, and deactivated when it drops back.
-- **Routing:** blocked roads come from `GET /roads`. The recommended alternative is the shortest road that is still available.
-- **Volunteer matching:** skill match counts most, distance breaks ties; the app picks the best available volunteer and saves it with `POST /matches`.
-
-## API
-
-| Method | Path | Notes |
-|---|---|---|
-| GET | `/health` | `{"status":"ok","database":"ok"}` (503 if the database is unavailable) |
-| POST | `/reset` | **Admin.** Atomic reset to the demo state: LOW risk, all roads AVAILABLE, no alerts. Accounts and the volunteer roster are kept |
-| GET | `/risk` | `{overall, zones[]}`; `?zone=Zone A` for one zone |
-| POST | `/simulate-hazard` | `{"hazard":"FLOOD","rainfall":120,"zone":"Zone A"?}` returns `before`, `after`, `active_alerts` |
-| GET / POST | `/alerts` | `?active_only=true` |
-| GET / POST | `/incidents` | types `FLOOD`, `BLOCKED_ROAD`, `EMERGENCY`; filters `?status=` `?type=` |
-| GET | `/incidents/{id}` | |
-| POST | `/incidents/{id}/verify`, `/reject`, `/resolve` | admin actions |
-| GET | `/roads`, `/roads/{id}` | `?status=BLOCKED` |
-| POST | `/roads/{id}/block`, `/unblock` | |
-| POST | `/help-request` | returns `request_id` |
-| GET | `/help-requests`, `/volunteers`, `/matches` | |
-| POST | `/matches` | `{"help_request_id":1,"volunteer_id":2}` |
-
-Zones are `Zone A`, `Zone B`, `Zone C`; incidents are assigned to the nearest one. CORS is open to all origins.
-
-### Auth and role endpoints
-
-| Method | Path | Who |
-|---|---|---|
-| POST | `/auth/register` | public (creates a `user`) |
-| POST | `/auth/login`, `/auth/logout` · GET `/auth/me` | login public; others need a token |
-| POST / PUT / DELETE | `/volunteers`, `/volunteers/{id}` | admin (DELETE disables the account and releases open assignments) |
-| GET / PATCH | `/volunteers/me`, `/volunteers/me/requests` | volunteer |
-| POST | `/matches/{id}/accept`, `/matches/{id}/complete` | the assigned volunteer (or admin) |
-| GET | `/admin/summary`, `/admin/users` · PATCH `/admin/users/{id}` | admin |
-| POST | `/simulate-hazard`, `/roads/{id}/block`, `/roads/{id}/unblock`, `/alerts`, `/incidents/{id}/verify\|reject\|resolve` | admin |
-| POST | `/incidents`, `/help-request` | any signed-in user (the owner is taken from the token) |
-| POST / GET | `/incidents/{id}/photo` | the reporter or an admin (raw image body, JPEG/PNG/WebP, max 5 MB) |
-
-## Backend reliability
-
-- **Validation:** bad requests return `422` with a readable message (`{"detail": "Invalid request: ..."}`); unknown ids, zones and users return `404`; a second match for the same request returns `409`. Nothing is saved when a request fails.
-- **Database errors:** return a JSON `500` ("Nothing was saved; please retry") and the server keeps running. Each request is one transaction, rolled back on error.
-- **Help types:** `MEDICINE`, `FOOD`, `WATER`, `FIRST_AID`, `EVACUATION` (also accepts "First Aid" or "Evacuation Assistance"); priorities `LOW`, `MEDIUM`, `HIGH`, `CRITICAL`.
-- **Alerts:** one engine alert per zone (created or upgraded at HIGH/CRITICAL, deactivated when risk drops). Each has `reason`, `risk_score`, `affected_road` (blocked roads in that zone), `created_at` and `updated_at`. Manual alerts from `POST /alerts` are never cleared by the engine.
-- **Data transparency:** risk responses carry `data_source` (`DEMO_SEED` or `SIMULATED`) and a notice that this is demo data, not a real-time forecast or official warning.
-- **Config:** the database is chosen by `DATABASE_URL` (see *Database* below). Older database files are upgraded automatically.
-
-### Backend tests
-
-```bash
-cd backend
-pip install -r requirements-dev.txt
-python -m compileall -q .
-python -m pytest -q        # 147 tests (API, authentication, photo upload), each on a temporary database
-```
-
-## Project structure
-
-```
-backend/
-  main.py          FastAPI routes
-  engine.py        risk, trust score, alert logic
-  db.py            schema, migrations, seed data; PostgreSQL and SQLite
-  scripts/         migrate_sqlite_to_postgres.py (one-time data copy)
-  tests/           pytest API, auth and photo tests
-  uploads/         incident photos (git-ignored)
-mobile/
-  App.js
-  src/
-    screens/       Home, Map, Report, Help, Alerts
-    components/    RiskCard, AlertCard, MapView, MatchCard, DemoPanel, ...
-    services/      api.js (live + fallback), accountApi.js (auth/admin/volunteer), session.js, mockData.js, geo.js
-    screens/       user app screens, auth/ (login, register), volunteer/, admin/
-    navigation/    RootNavigator (role gate), AppNavigator (user), AdminNavigator
-    features/disaster-response/   geofencing, routing, matching (TypeScript module)
-    integration/   adapter between backend data and the module
-    context/       DataContext.js (polling)
-    navigation/    AppNavigator.js (bottom tabs)
-    config/        api.js (API URL, demo switches)
-```
-
-## Out of scope for the MVP
-
-Login, user profiles, chat, payments, other disaster types, machine learning, an admin dashboard, and real photo upload (the photo button is visual only).
-
-
-## Weather monitoring (heavy-rainfall areas)
-
-The backend polls Open-Meteo for a grid of points covering `MONITORING_BOUNDS` (default Bengaluru, 5 x 5 = 25 points) in one
-batched request every `WEATHER_REFRESH_INTERVAL` seconds (default 900) and keeps the latest reading per grid cell in
-`environment_data` (one row per cell, updated in place, previous reading kept). Phones never call the weather API: they read
-`GET /weather/monitoring`, which returns the cached cells, a summary and a status (`ok`, `stale` after 3 missed intervals, or
-`unavailable`). Rain-rate classes (mm/h) are configurable: `RAIN_MODERATE_THRESHOLD`, `HEAVY_RAIN_THRESHOLD`,
-`RAIN_VERY_HEAVY_THRESHOLD`. The map draws only moderate-and-above areas as translucent circles; tapping one shows the reading.
-
-Heavy rainfall is a weather observation, not a flood. After each refresh every risk zone takes the real 24 h rainfall of its
-nearest cell and the existing risk engine re-scores it and raises or clears its alert. Zones under an admin drill (SIMULATED)
-are not overwritten until the admin resets. If the provider fails, the last data is kept and labelled stale; nothing is invented.
+## Project layout
+`backend/`: `main.py` (core API), `routes_account.py`, `routes_admin.py`, `routes_intel.py`, `engine.py` (risk, trust, alerts), `flood_intel.py`, `intel_jobs.py`, `weather_monitor.py`, `road_risk.py`, `routing_service.py`, `ml_model.py`, `notify.py`, `auth.py`, `db.py`, `providers/` (weather, satellite, terrain, waterlevel, climate, routing), `scripts/`, `tests/`. `mobile/`: `src/screens` (user, `volunteer/`, `admin/`, `auth/`), `src/components`, `src/context`, `src/services`, `src/i18n`, `src/features/disaster-response` (geospatial module: geofencing, Dijkstra, matching), `e2e/` (Playwright), `__tests__/`. `docs/`: architecture, flood intelligence, claims and limits, deployment, demo script, screenshots.

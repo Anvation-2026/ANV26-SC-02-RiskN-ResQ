@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   Image,
   KeyboardAvoidingView,
@@ -15,8 +15,9 @@ import Feather from '@expo/vector-icons/Feather';
 import Header from '../components/Header';
 import ActionButton from '../components/ActionButton';
 import { useData } from '../context/DataContext';
+import { AnimatedBar, FadeIn, PopIn } from '../components/motion';
 import * as ImagePicker from 'expo-image-picker';
-import { submitIncident, uploadIncidentPhoto } from '../services/api';
+import { newRequestKey, submitIncident, uploadIncidentPhoto } from '../services/api';
 import { colors, radius, shadow } from '../theme';
 
 const TYPES = [
@@ -44,6 +45,9 @@ export default function ReportScreen({ navigate }) {
   const [severity, setSeverity] = useState(3);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
+  const [progress, setProgress] = useState(null); // 0-100 while the photo is uploading
+  const formKey = useRef(newRequestKey()); // one key per form: a double tap or retry never files the report twice
+  const [submitted, setSubmitted] = useState(null); // the server's answer, including how the environment compares with the report
   const [errorMsg, setErrorMsg] = useState(null);
   const [photo, setPhoto] = useState(null); // asset chosen with the picker
   const [photoResult, setPhotoResult] = useState(null); // {status: 'uploaded'|'failed', message?}
@@ -79,12 +83,15 @@ export default function ReportScreen({ navigate }) {
         latitude: userLocation.latitude,
         longitude: userLocation.longitude,
         severity,
+        idempotencyKey: formKey.current,
       });
+      setSubmitted(incident);
       let result = null;
       if (photo) {
         try {
-          await uploadIncidentPhoto(incident.id, photo.uri); // resolves only after the server stored it
-          result = { status: 'uploaded' };
+          setProgress(0);
+          const stored = await uploadIncidentPhoto(incident.id, photo.uri, setProgress); // resolves only after the server stored it
+          result = { status: 'uploaded', storage: stored && stored.storage };
         } catch (e) {
           result = { status: 'failed', message: (e && e.detail) || 'Please try again later.' };
         }
@@ -96,11 +103,14 @@ export default function ReportScreen({ navigate }) {
       setErrorMsg(e && e.status ? (e.detail || 'The server rejected the report.') : 'Could not reach the server. Your report was not sent. Check your connection and try again.');
     } finally {
       setBusy(false);
+      setProgress(null);
     }
   };
 
   const reset = () => {
+    formKey.current = newRequestKey();
     setDone(false);
+    setSubmitted(null);
     setText('');
     setType('FLOODED_ROAD');
     setSeverity(3);
@@ -129,14 +139,22 @@ export default function ReportScreen({ navigate }) {
         >
           {done ? (
             <View style={styles.success}>
-              <View style={styles.check}>
+              <PopIn><View style={styles.check}>
                 <Feather name="check" size={24} color="#FFFFFF" />
-              </View>
+              </View></PopIn>
               <Text style={styles.sTitle}>Incident Broadcast</Text>
               <Text style={styles.sBody}>
-                Your report has been logged to the civic response network and will immediately factor into real-time routing adjustments.
+                Your report has been logged. It is compared with weather, satellite and terrain data and supports the flood-risk estimate; one report on its own does not declare a flood.
               </Text>
+              {submitted && submitted.merged_into ? <Text style={styles.photoOk}>Similar nearby reports were merged, which raises confidence in this one.</Text> : null}
+              {submitted && submitted.environmental_context ? (
+                <View style={{ alignSelf: 'stretch', marginTop: 10 }}>
+                  <Text style={styles.sBody}>Incident confidence: {String(submitted.confidence || '').toLowerCase()}. Environment at this spot:</Text>
+                  {submitted.environmental_context.map((line) => <Text key={line} style={styles.sBody}>• {line}</Text>)}
+                </View>
+              ) : null}
               {photoResult && photoResult.status === 'uploaded' ? <Text style={styles.photoOk}>Photo uploaded with your report.</Text> : null}
+              {photoResult && photoResult.status === 'uploaded' ? <Text style={styles.sBody}>{photoResult.storage === 'cloudinary' ? 'Stored in cloud storage.' : 'Stored on the RiskN ResQ server (cloud storage is not configured).'}</Text> : null}
               {photoResult && photoResult.status === 'failed' ? <Text style={styles.photoBad}>Your report was saved, but the photo could not be uploaded: {photoResult.message}</Text> : null}
               <View style={{ alignSelf: 'stretch', gap: 10, marginTop: 16 }}>
                 <ActionButton
@@ -222,13 +240,21 @@ export default function ReportScreen({ navigate }) {
 
               <Text style={styles.label}>PHOTO (OPTIONAL)</Text>
               {photo ? (
-                <View style={styles.photoBox}>
-                  <Image source={{ uri: photo.uri }} style={styles.photoPreview} resizeMode="cover" />
-                  <Pressable onPress={() => setPhoto(null)} style={styles.photoRemove} hitSlop={8}>
-                    <Feather name="x" size={14} color="#fff" />
-                    <Text style={styles.photoRemoveText}>Remove</Text>
-                  </Pressable>
-                </View>
+                <FadeIn from="none" duration={300}>
+                  <View style={styles.photoBox}>
+                    <Image source={{ uri: photo.uri }} style={styles.photoPreview} resizeMode="cover" />
+                    <View style={{ position: 'absolute', right: 8, top: 8, flexDirection: 'row', gap: 8 }}>
+                      <Pressable onPress={() => pickPhoto(Platform.OS !== 'web')} style={styles.photoRemove} hitSlop={8} disabled={busy} accessibilityRole="button">
+                        <Feather name={Platform.OS === 'web' ? 'image' : 'camera'} size={14} color="#fff" />
+                        <Text style={styles.photoRemoveText}>{Platform.OS === 'web' ? 'Change' : 'Retake'}</Text>
+                      </Pressable>
+                      <Pressable onPress={() => setPhoto(null)} style={styles.photoRemove} hitSlop={8} disabled={busy} accessibilityRole="button">
+                        <Feather name="x" size={14} color="#fff" />
+                        <Text style={styles.photoRemoveText}>Remove</Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                </FadeIn>
               ) : (
                 <View style={styles.photoRow}>
                   <Pressable onPress={() => pickPhoto(false)} style={[styles.field, styles.photoBtn]}>
@@ -248,10 +274,20 @@ export default function ReportScreen({ navigate }) {
                 <Text style={styles.errorText}>{errorMsg}</Text>
               )}
 
+              {busy && photo && progress != null ? (
+                <FadeIn from="none" duration={200}>
+                  <View style={{ marginTop: 12 }} accessibilityRole="progressbar" accessibilityValue={{ min: 0, max: 100, now: progress }}>
+                    <AnimatedBar pct={progress} color={colors.primary} height={8} track="#E2E8F0" />
+                    <Text style={styles.uploadText}>Uploading photo… {progress}%</Text>
+                  </View>
+                </FadeIn>
+              ) : null}
+
               <View style={{ marginTop: 14 }}>
                 <ActionButton
                   variant="primary"
                   label={busy ? 'TRANSMITTING REPORT...' : 'SUBMIT REPORT'}
+                  loading={busy}
                   disabled={busy || !userLocation}
                   color={colors.HIGH}
                   onPress={submit}
@@ -266,11 +302,12 @@ export default function ReportScreen({ navigate }) {
 }
 
 const styles = StyleSheet.create({
+  uploadText: { fontFamily: 'PlusJakartaSans_600SemiBold', fontSize: 12, color: colors.muted, marginTop: 6 },
   photoRow: { flexDirection: 'row', gap: 10 },
   photoBtn: { flex: 1, justifyContent: 'center' },
   photoBox: { borderRadius: radius.card, overflow: 'hidden', backgroundColor: '#E2E8F0' },
   photoPreview: { width: '100%', height: 180 },
-  photoRemove: { position: 'absolute', top: 10, right: 10, flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(15,23,42,0.8)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999 },
+  photoRemove: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(15,23,42,0.8)', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999 },
   photoRemoveText: { color: '#fff', fontSize: 12, fontFamily: 'PlusJakartaSans_700Bold' },
   photoOk: { fontFamily: 'PlusJakartaSans_700Bold', fontSize: 13, color: colors.LOW, marginTop: 10, textAlign: 'center' },
   photoBad: { fontFamily: 'PlusJakartaSans_600SemiBold', fontSize: 13, color: '#B45309', marginTop: 10, textAlign: 'center', lineHeight: 19 },

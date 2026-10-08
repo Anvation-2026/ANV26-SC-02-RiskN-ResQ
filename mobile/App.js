@@ -11,6 +11,7 @@ import {
   PlusJakartaSans_800ExtraBold,
 } from '@expo-google-fonts/plus-jakarta-sans';
 import { AuthProvider } from './src/context/AuthContext';
+import { LanguageProvider } from './src/i18n';
 import RootNavigator from './src/navigation/RootNavigator';
 
 export default function App() {
@@ -28,12 +29,14 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <AuthProvider>
-        <View style={{ flex: 1, backgroundColor: '#0B1F33' }}>
-          <StatusBar style="light" />
-          <RootNavigator />
-        </View>
-      </AuthProvider>
+      <LanguageProvider>
+        <AuthProvider>
+          <View style={{ flex: 1, backgroundColor: '#0B1F33' }}>
+            <StatusBar style="light" />
+            <RootNavigator />
+          </View>
+        </AuthProvider>
+      </LanguageProvider>
     </SafeAreaProvider>
   );
 }

@@ -301,3 +301,37 @@ describe('RiskNResQ Disaster Response Module', () => {
     }
   });
 });
+
+describe('risk-aware routing (flood-risk estimates raise cost, only BLOCKED excludes)', () => {
+  const risky = (roads: typeof INITIAL_MOCK_ROADS, id: string, riskScore: number) => roads.map((r) => (r.id === id ? { ...r, riskScore } : r));
+
+  test('without risk estimates the route and its note are unchanged', () => {
+    const route = findRecommendedRoute('A', 'D', INITIAL_MOCK_ROADS, INITIAL_ROAD_GRAPH);
+    expect(route.riskInformation).toBeUndefined();
+    expect(route.safetyNote).toBe('Recommended alternative route based on available incident data.');
+  });
+
+  test('a high-risk road makes the route prefer an alternative that is not much longer', () => {
+    const base = findRecommendedRoute('A', 'D', INITIAL_MOCK_ROADS, INITIAL_ROAD_GRAPH);
+    const firstRoadId = INITIAL_ROAD_GRAPH.edges.find((e) => base.nodes.includes(e.from) && base.nodes.includes(e.to))!.roadId;
+    const withRisk = findRecommendedRoute('A', 'D', risky(INITIAL_MOCK_ROADS, firstRoadId, 100), INITIAL_ROAD_GRAPH);
+    expect(withRisk.success).toBe(true);
+    expect(withRisk.riskInformation).toBeDefined();
+    expect(withRisk.safetyNote).toBe('Recommended alternative route based on current environmental and incident data.');
+    expect(withRisk.safetyNote.toLowerCase()).not.toContain('safe route');
+  });
+
+  test('a risky road is still usable when it is the only way (not treated as blocked)', () => {
+    const allRisky = INITIAL_MOCK_ROADS.map((r) => ({ ...r, riskScore: 90 }));
+    const route = findRecommendedRoute('A', 'D', allRisky, INITIAL_ROAD_GRAPH);
+    expect(route.success).toBe(true);
+    expect(route.riskInformation!.potentiallyAffectedRoads.length).toBeGreaterThan(0);
+    expect(route.distanceKm).toBe(findRecommendedRoute('A', 'D', INITIAL_MOCK_ROADS, INITIAL_ROAD_GRAPH).distanceKm); // real km, not weighted km
+  });
+
+  test('blocked roads stay excluded whatever the risk values say', () => {
+    const blocked = blockRoad(INITIAL_MOCK_ROADS[0].id, risky(INITIAL_MOCK_ROADS, INITIAL_MOCK_ROADS[1].id, 10));
+    const route = findRecommendedRoute('A', 'D', blocked, INITIAL_ROAD_GRAPH);
+    expect(route.blockedRoads.map((r) => r.id)).toContain(INITIAL_MOCK_ROADS[0].id);
+  });
+});

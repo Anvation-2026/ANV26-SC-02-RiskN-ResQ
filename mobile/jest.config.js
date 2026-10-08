@@ -7,7 +7,7 @@ module.exports = {
     '^expo-location$': '<rootDir>/__mocks__/expo-location.js',
   },
   transform: {
-    '^.+\\.tsx?$': [
+    '^.+\\.[tj]sx?$': [
       'ts-jest',
       {
         tsconfig: {
@@ -15,6 +15,7 @@ module.exports = {
           rootDir: '.',
           ignoreDeprecations: '6.0',
           jsx: 'react-jsx',
+          allowJs: true,
         },
         diagnostics: false,
       },

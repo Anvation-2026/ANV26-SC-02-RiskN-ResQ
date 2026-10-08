@@ -9,23 +9,33 @@ import {
 import RNMapView, {
   Circle as RNCircle,
   Marker as RNMarker,
+  Polygon as RNPolygon,
   Polyline as RNPolyline,
   PROVIDER_DEFAULT,
 } from 'react-native-maps';
 import Feather from '@expo/vector-icons/Feather';
 import { colors, radius, riskColor, shadow } from '../theme';
-import { drawableRain, RAIN_COLOR, RAIN_FILL, RAIN_RADIUS_KM } from './rain';
+import { useT } from '../i18n';
+import { cellCorners, drawableCells, drawableRain, RAIN_COLOR, RAIN_FILL, RAIN_RADIUS_KM, RISK_COLOR, RISK_FILL, SAT_COLOR, TERRAIN_COLOR } from './rain';
 
 const ZONE_RADIUS_KM = { LOW: 0, MODERATE: 0.7, HIGH: 1.2, CRITICAL: 1.8 };
 
 export function MapLegend({ items }) {
+  const t = useT();
   const defaultItems = [
-    { label: 'High Risk', color: colors.HIGH, type: 'dot' },
-    { label: 'Blocked Road', color: colors.HIGH, type: 'dashed' },
-    { label: 'Your Location', color: colors.primary, type: 'dot' },
-    { label: 'Heavy Rainfall', color: '#F97316', type: 'dot' },
-    { label: 'Incident', color: '#D97706', type: 'dot' },
-    { label: 'Recommended Route', color: colors.route, type: 'line' },
+    { label: t('legend.you'), color: colors.primary, type: 'dot' },
+    { label: t('legend.lowRisk'), color: RISK_COLOR.LOW, type: 'dot' },
+    { label: t('legend.medium'), color: RISK_COLOR.MEDIUM, type: 'dot' },
+    { label: t('legend.high'), color: RISK_COLOR.HIGH, type: 'dot' },
+    { label: t('legend.critical'), color: RISK_COLOR.CRITICAL, type: 'dot' },
+    { label: t('legend.rain'), color: '#38BDF8', type: 'dot' },
+    { label: t('legend.satellite'), color: SAT_COLOR, type: 'dot' },
+    { label: t('legend.hotspot'), color: '#B91C1C', type: 'dot' },
+    { label: t('legend.blocked'), color: colors.HIGH, type: 'dashed' },
+    { label: t('legend.incident'), color: '#D97706', type: 'dot' },
+    { label: t('legend.route'), color: colors.route, type: 'line' },
+    { label: t('legend.places'), color: '#0F766E', type: 'dot' },
+    { label: t('legend.potential'), color: '#F97316', type: 'line' },
   ];
 
   const chips = useMemo(() => {
@@ -41,7 +51,7 @@ export function MapLegend({ items }) {
       }
       let type = 'dot';
       let color = colors.primary;
-      if (label.includes('Rain')) { color = '#F97316'; type = 'dot'; }
+      if (label.includes('Rain')) { color = '#38BDF8'; type = 'dot'; }
       else if (label.includes('Risk') || label.includes('Hazard')) { color = colors.HIGH; type = 'dot'; }
       else if (label.includes('Blocked')) { color = colors.HIGH; type = 'dashed'; }
       else if (label.includes('Route') || label.includes('Recommended')) { color = colors.route; type = 'line'; }
@@ -156,6 +166,14 @@ export default function MapView({
   labelBlockedOnly = false,
   rainAreas = [],
   onRainPress,
+  places = [],
+  onPlacePress,
+  riskCells = [],
+  satelliteCells = [],
+  hotspots = [],
+  terrainCells = [],
+  cellHalf,
+  onIntelPress,
 }) {
   const mapRef = useRef(null);
   const userCoord = useMemo(() => normalizeCoord(user), [user]);
@@ -268,6 +286,8 @@ export default function MapView({
           id: road.id || `road-${idx}`,
           name: road.name || 'Corridor',
           status: road.status || 'OPEN',
+          lowLying: !!road.low_lying,
+          potential: road.risk_state === 'POTENTIALLY_AFFECTED',
           pts,
           midCoord: pts[midIdx],
         };
@@ -342,6 +362,39 @@ export default function MapView({
           );
         })}
 
+        {/* 0. FLOOD INTELLIGENCE LAYERS: terrain susceptibility, risk cells, satellite water change, hotspots */}
+        {cellHalf && (Array.isArray(terrainCells) ? terrainCells : []).map((cell) => (
+          <RNPolygon key={`terrain-${cell.cell}`} coordinates={cellCorners(cell, cellHalf).map(([latitude, longitude]) => ({ latitude, longitude }))}
+            fillColor={`${TERRAIN_COLOR}24`} strokeWidth={0} zIndex={0} />
+        ))}
+        {cellHalf && drawableCells(riskCells).map((cell) => (
+          <RNPolygon key={`risk-${cell.cell}`} coordinates={cellCorners(cell, cellHalf).map(([latitude, longitude]) => ({ latitude, longitude }))}
+            fillColor={`${RISK_COLOR[cell.risk_level]}${Math.round(RISK_FILL[cell.risk_level] * 255).toString(16).padStart(2, '0')}`}
+            strokeColor={RISK_COLOR[cell.risk_level]} strokeWidth={cell.risk_level === 'LOW' ? 0 : 1} zIndex={0} tappable
+            onPress={() => onIntelPress && onIntelPress({ kind: 'cell', cell })} />
+        ))}
+        {cellHalf && (Array.isArray(satelliteCells) ? satelliteCells : []).map((cell) => (
+          <React.Fragment key={`sat-${cell.cell}`}>
+            <RNPolygon coordinates={cellCorners(cell, cellHalf).map(([latitude, longitude]) => ({ latitude, longitude }))}
+              fillColor={`${SAT_COLOR}1F`} strokeColor={SAT_COLOR} strokeWidth={2} lineDashPattern={[8, 6]} zIndex={1} tappable
+              onPress={() => onIntelPress && onIntelPress({ kind: 'satellite', cell })} />
+            <RNMarker coordinate={{ latitude: cell.latitude, longitude: cell.longitude }} anchor={{ x: 0.5, y: 0.5 }} zIndex={11}
+              onPress={() => onIntelPress && onIntelPress({ kind: 'satellite', cell })}>
+              <View style={[styles.placePin, { backgroundColor: SAT_COLOR }]}><Text style={styles.placePinText}>S</Text></View>
+            </RNMarker>
+          </React.Fragment>
+        ))}
+        {(Array.isArray(hotspots) ? hotspots : []).filter((h) => normalizeCoord(h)).map((h) => (
+          <React.Fragment key={`hot-${h.id}`}>
+            <RNCircle center={{ latitude: h.latitude, longitude: h.longitude }} radius={h.radius_km * 1000} strokeColor="#B91C1C" strokeWidth={2}
+              lineDashPattern={[2, 6]} fillColor="transparent" zIndex={2} />
+            <RNMarker coordinate={{ latitude: h.latitude, longitude: h.longitude }} anchor={{ x: 0.5, y: 0.5 }} zIndex={13}
+              onPress={() => onIntelPress && onIntelPress({ kind: 'hotspot', hotspot: h })}>
+              <View style={[styles.placePin, { backgroundColor: '#B91C1C' }]}><Text style={styles.placePinText}>!</Text></View>
+            </RNMarker>
+          </React.Fragment>
+        ))}
+
         {/* 1b. HEAVY RAINFALL AREAS (weather observations; tap for details) */}
         {drawableRain(rainAreas).map((a) => (
           <RNCircle
@@ -398,8 +451,9 @@ export default function MapView({
             <RNPolyline
               key={`road-${road.id}`}
               coordinates={road.pts}
-              strokeColor="#94A3B8"
-              strokeWidth={3.5}
+              strokeColor={road.potential ? '#F97316' : road.lowLying ? '#F59E0B' : '#94A3B8'}
+              strokeWidth={road.potential || road.lowLying ? 4.5 : 3.5}
+              lineDashPattern={road.potential ? [6, 6] : undefined}
               zIndex={2}
             />
           );
@@ -438,6 +492,21 @@ export default function MapView({
               </View>
             </RNMarker>
           ))}
+
+        {/* 4b. HOSPITALS AND SHELTERS */}
+        {(Array.isArray(places) ? places : []).filter((p) => normalizeCoord(p)).map((p) => (
+          <RNMarker
+            key={`place-${p.id}`}
+            coordinate={{ latitude: p.latitude, longitude: p.longitude }}
+            anchor={{ x: 0.5, y: 0.5 }}
+            zIndex={10}
+            onPress={() => onPlacePress && onPlacePress(p)}
+          >
+            <View style={[styles.placePin, { backgroundColor: p.kind === 'HOSPITAL' ? '#DC2626' : '#0F766E' }]}>
+              <Text style={styles.placePinText}>{p.kind === 'HOSPITAL' ? '+' : 'S'}</Text>
+            </View>
+          </RNMarker>
+        ))}
 
         {/* 5. REAL USER LOCATION PIN */}
         {userCoord && (
@@ -523,6 +592,8 @@ export default function MapView({
 }
 
 const styles = StyleSheet.create({
+  placePin: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: '#fff', alignItems: 'center', justifyContent: 'center' },
+  placePinText: { color: '#fff', fontSize: 12, fontFamily: 'PlusJakartaSans_800ExtraBold', lineHeight: 14 },
   container: {
     borderRadius: radius.card,
     overflow: 'hidden',

@@ -11,13 +11,17 @@ import { symbols } from '../assets';
 import ConnectionBanner from '../components/ConnectionBanner';
 import { useData } from '../context/DataContext';
 import { colors, radius, riskColor, shadow } from '../theme';
-import { timeAgo } from '../services/geo';
+import { haversineKm, timeAgo } from '../services/geo';
+import { FadeIn, staggerDelay } from '../components/motion';
+import { MetricCard, SectionTitle, StateView } from '../components/ui';
+import { ago } from '../components/rain';
 
 const TEXT = {
-  LOW: ['LOW FLOOD RISK', 'Drainage and street runoff within normal limits. No severe hazard reported.'],
-  MODERATE: ['MODERATE FLOOD RISK', 'Elevated precipitation detected. Water accumulation monitored in low-lying corridors.'],
-  HIGH: ['HIGH FLOOD RISK', 'Heavy rainfall intensity. Waterlogging and road obstructions confirmed.'],
-  CRITICAL: ['CRITICAL FLOOD RISK', 'Severe localized flooding. Essential transport corridors compromised. Evacuation alert.'],
+  LOW: ['LOW FLOOD RISK', 'Signals are within normal limits.'],
+  MODERATE: ['MEDIUM FLOOD RISK', 'Rainfall is elevated. Low-lying roads may collect water: check the map before you travel.'],
+  MEDIUM: ['MEDIUM FLOOD RISK', 'Rainfall is elevated. Low-lying roads may collect water: check the map before you travel.'],
+  HIGH: ['HIGH FLOOD RISK', 'The risk estimate is high. Avoid potentially affected roads and follow the recommended route.'],
+  CRITICAL: ['CRITICAL FLOOD RISK', 'The risk estimate is very high. Move away from low-lying areas and follow official instructions.'],
 };
 
 const Row = ({ label, value, color }) => (
@@ -36,6 +40,7 @@ export default function HomeScreen({ navigate }) {
     risk,
     weather,
     weatherMonitor,
+    intel,
     incidents,
     alerts,
     blocked,
@@ -57,6 +62,11 @@ export default function HomeScreen({ navigate }) {
   const [title, body] = TEXT[currentLevel] || TEXT.LOW;
 
   const activeIncidents = incidents.filter((i) => i.status !== 'RESOLVED');
+  const nearby = userLocation
+    ? activeIncidents.filter((i) => Number.isFinite(i.latitude) && Number.isFinite(i.longitude))
+        .map((i) => ({ ...i, distance: haversineKm(userLocation.latitude, userLocation.longitude, i.latitude, i.longitude) }))
+        .filter((i) => i.distance <= 5).sort((a, b) => a.distance - b.distance).slice(0, 3)
+    : [];
   const topAlert = alerts.length > 0 ? alerts[0] : null; // strongest active alert (zone alert or reported incident)
 
   const isPermissionDenied = locationStatus === 'denied' || locationStatus === 'error';
@@ -105,9 +115,6 @@ export default function HomeScreen({ navigate }) {
           </View>
         )}
 
-        {/* 1b. WEATHER (rainfall only; flood risk is the separate card below) */}
-        <WeatherCard monitor={weatherMonitor} at={userLocation} />
-
         {/* 2. REAL MULTI-FACTOR FLOOD RISK CARD */}
         <RiskCard
           offline={source !== 'live'}
@@ -119,10 +126,30 @@ export default function HomeScreen({ navigate }) {
                   reason: risk.reason,
                   drill: risk.drill,
                   zoneAlert: risk.zoneAlert,
+                  probability: risk.probability,
+                  probabilityBasis: risk.probability_basis,
+                  insufficient: risk.insufficient,
+                  signals: risk.signals,
+                  missing: risk.missing,
+                  model: risk.model,
                 }
               : null
           }
         />
+
+
+        {/* weather (rainfall observation only; flood risk is the card above) */}
+        <FadeIn delay={staggerDelay(1)}>
+          <WeatherCard monitor={weatherMonitor} at={userLocation} />
+
+        </FadeIn>
+
+        {/* 2b. RISK HISTORY (this zone, last 12 h, one entry per change of level) */}
+        {intel && intel.risk_history && intel.risk_history.steps.length > 1 ? (
+          <Text style={{ fontFamily: 'PlusJakartaSans_600SemiBold', fontSize: 12, color: colors.muted, marginBottom: 10 }}>
+            Risk history, {intel.risk_history.zone}: {intel.risk_history.steps.map((x) => `${new Date(x.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} → ${x.risk_level}`).join('   ')}
+          </Text>
+        ) : null}
 
         {/* 3. ENVIRONMENTAL TELEMETRY ATTRIBUTION */}
         {risk && (
@@ -158,6 +185,42 @@ export default function HomeScreen({ navigate }) {
             )}
           </View>
         )}
+
+        {/* 3b. RAINFALL OBSERVATIONS (accumulation over the last 1 / 3 / 6 / 24 hours, from the backend's cached grid) */}
+        <FadeIn delay={staggerDelay(3)}>
+          <SectionTitle>Recent rainfall</SectionTitle>
+          {weather && weather.source ? (
+            <>
+              <View style={{ flexDirection: 'row', gap: 10 }}>
+                {[['1 hour', weather.rain_1h_mm], ['3 hours', weather.rain_3h_mm], ['6 hours', weather.rain_6h_mm], ['24 hours', weather.rainfall_24h_mm]].map(([label, v], i) => (
+                  <MetricCard key={label} label={label.toUpperCase()} value={v == null ? '—' : Number(v)} format={(n) => `${n.toFixed(1)}`} hint="mm" color={v >= 30 ? colors.HIGH : colors.text} delay={staggerDelay(i, 60)} />
+                ))}
+              </View>
+              <Text style={styles.obs}>
+                Rainfall observation · {weather.source}{weather.observed_at ? ` · ${ago(weather.observed_at)}` : ''}{weather.stale ? ' · STALE DATA' : ''}
+                {weather.forecast_3h_mm != null ? ` · forecast next 3 h: ${Number(weather.forecast_3h_mm).toFixed(1)} mm` : ''}
+              </Text>
+            </>
+          ) : (
+            <StateView kind="empty" compact title="Weather data unavailable" message="Rainfall figures will appear when the weather service responds." icon="cloud-off" />
+          )}
+        </FadeIn>
+
+        {/* 3c. NEARBY INCIDENTS (community reports within 5 km: supporting evidence, not confirmed flooding) */}
+        <FadeIn delay={staggerDelay(4)}>
+          <SectionTitle>Nearby incident reports</SectionTitle>
+          {nearby.length === 0 ? (
+            <StateView kind="empty" compact title="No active incidents have been reported in this area." message="Community reports appear here and support the environmental data; one report does not by itself mean flooding." icon="shield" />
+          ) : nearby.map((i) => (
+            <View key={i.id} style={styles.nearRow}>
+              <View style={[styles.nearDot, { backgroundColor: i.status === 'VERIFIED' ? colors.LOW : colors.MEDIUM }]} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.nearTitle} numberOfLines={1}>{String(i.type || 'Incident').replace(/_/g, ' ')} · {i.distance.toFixed(1)} km</Text>
+                <Text style={styles.nearSub} numberOfLines={1}>{i.status === 'VERIFIED' ? 'Verified by an administrator' : 'Community report, not yet verified'} · {timeAgo(i.timestamp)}</Text>
+              </View>
+            </View>
+          ))}
+        </FadeIn>
 
         {/* 4. ACTIVE ALERT OR STATUS NOTICE */}
         {topAlert ? (
@@ -242,6 +305,11 @@ export default function HomeScreen({ navigate }) {
 }
 
 const styles = StyleSheet.create({
+  obs: { fontFamily: 'PlusJakartaSans_500Medium', fontSize: 11, color: colors.muted, marginTop: 8, marginBottom: 6, lineHeight: 16 },
+  nearRow: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: colors.card, borderRadius: 14, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: colors.border },
+  nearDot: { width: 10, height: 10, borderRadius: 5 },
+  nearTitle: { fontFamily: 'PlusJakartaSans_700Bold', fontSize: 14, color: colors.text },
+  nearSub: { fontFamily: 'PlusJakartaSans_500Medium', fontSize: 12, color: colors.muted, marginTop: 1 },
   manualBtn: { marginTop: 10, alignItems: 'center', paddingVertical: 8 },
   manualBtnText: { color: '#991B1B', fontSize: 13, fontFamily: 'PlusJakartaSans_700Bold', textDecorationLine: 'underline' },
   container: {

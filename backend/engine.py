@@ -65,36 +65,66 @@ def similar_count(c, inc) -> int:
         return 0
 
 
+def trust_factors(c, inc) -> list:
+    """Why an incident has its trust score: a list of {label, points}. The score is 50 plus the sum, clamped to 0-100."""
+    inc = dict(inc)
+    if inc.get("status") == "REJECTED":
+        return [{"label": "Rejected by an administrator", "points": -50}]
+    f = [{"label": "Citizen report (baseline)", "points": 50}]
+    try:
+        if similar_count(c, inc) >= 1:
+            f.append({"label": "Corroborated by another report nearby", "points": 15})
+    except Exception:
+        pass
+    extra = min(10, 5 * int(inc.get("confirmations") or 0))
+    if extra:
+        f.append({"label": f"{inc['confirmations']} duplicate report(s) merged into this one", "points": extra})
+    if inc.get("status") in ("VERIFIED", "RESOLVED"):
+        f.append({"label": "Verified by an administrator", "points": 25})
+    if inc.get("photo_url") or inc.get("photo_file"):
+        f.append({"label": "Photo evidence attached", "points": 10})
+    # Environmental corroboration: does the weather / satellite / terrain at that spot support a flood report?
+    try:
+        if inc.get("type") in ("FLOOD", "FLOODED_ROAD", "WATERLOGGING"):
+            import flood_intel
+            ctx = flood_intel.env_context(c, inc["latitude"], inc["longitude"])
+            if ctx.get("covered"):
+                n = 0
+                if ctx["heavy_rain"]:
+                    f.append({"label": "Heavy rainfall recorded in this area", "points": 10}); n += 1
+                if ctx["satellite_abnormal"]:
+                    f.append({"label": "Satellite shows abnormal water expansion here", "points": 10}); n += 1
+                if ctx["flood_prone"]:
+                    f.append({"label": "Location is low-lying, flood-susceptible ground", "points": 5}); n += 1
+                if n == 0:
+                    f.append({"label": "No heavy rain or satellite evidence in this area at the moment", "points": -5})
+    except Exception:
+        pass
+    # GPS plausibility: was the reporter near the incident when they reported it? (only when their position is known and fresh)
+    try:
+        if inc.get("user_id"):
+            u = c.execute("SELECT latitude, longitude, last_seen FROM users WHERE id=?", (inc["user_id"],)).fetchone()
+            if u and u["latitude"] is not None and u["last_seen"] and abs(_age_hours(u["last_seen"]) - _age_hours(inc["timestamp"])) <= 2:
+                d = _km(inc["latitude"], inc["longitude"], u["latitude"], u["longitude"])
+                if d <= 1.0:
+                    f.append({"label": "Reporter was at the incident location", "points": 5})
+                elif d > 5.0:
+                    f.append({"label": f"Reporter was {d:.0f} km away from the incident", "points": -10})
+    except Exception:
+        pass
+    if inc.get("timestamp"):
+        age = _age_hours(inc["timestamp"])
+        if age > 6:
+            f.append({"label": f"Report is {age:.0f} h old", "points": -min(30, int((age - 6) * 5))})
+    return f
+
+
 def compute_trust(c, inc) -> int:
     """Calculate incident trust/confidence score (0 to 100)."""
     inc = dict(inc)
     if inc.get("status") == "REJECTED":
         return 0
-
-    score = 50  # Baseline for a citizen report
-
-    # Corroborating reports of same type within 500m and 3 hours
-    try:
-        if similar_count(c, inc) >= 1:
-            score += 15
-    except Exception:
-        pass
-
-    # Verified status from emergency dispatcher / admin
-    if inc.get("status") in ("VERIFIED", "RESOLVED"):
-        score += 25
-
-    # Presence of photographic evidence
-    if inc.get("photo_url"):
-        score += 10
-
-    # Aging decay: stale reports lose confidence over time (> 6 hours)
-    if "timestamp" in inc and inc["timestamp"]:
-        age = _age_hours(inc["timestamp"])
-        if age > 6:
-            score -= min(30, int((age - 6) * 5))
-
-    return max(0, min(100, score))
+    return max(0, min(100, sum(x["points"] for x in trust_factors(c, inc))))
 
 
 def confidence_label(trust_score: int) -> str:
@@ -220,14 +250,42 @@ def compute_flood_risk(
     }
 
 
+def _intel_risk(c, zone: str, env):
+    """Flood-intelligence assessment for the grid cell this zone sits in, shaped like the legacy result. None when the
+    zone is under an admin drill, has no monitored cell, or the cell has too little data (the legacy path then reports it)."""
+    if env and env["data_source"] == "SIMULATED":
+        return None
+    import flood_intel
+    zla, zlo = ZONES[zone]
+    cell = flood_intel.nearest_cell(c, zla, zlo)
+    if not cell:
+        return None
+    a = flood_intel.assess_cell(c, cell["zone"], zone=zone)
+    if a["insufficient"]:
+        return None
+    weather = next((x for x in a["sources"] if x["name"] == "weather"), None)
+    return {
+        "location": zone, "risk_score": a["risk_score"], "risk_level": a["risk_level"], "rainfall": a["rainfall"],
+        "reason": a["reason"], "blocked_roads": blocked_roads(c, zone), "data_source": weather["source"] if weather else cell["data_source"],
+        "probability": a["probability"], "insufficient": False, "mode": "LIVE", "model": a["model"],
+        # a satellite-only heads-up needs a recent pass, or rain that makes an old one relevant
+        "satellite_abnormal": bool(a["satellite_abnormal"] and a.get("satellite_confidence") in ("MEDIUM", "HIGH")
+                                   and ((a.get("satellite_age_days") or 99) <= 5 or a["rainfall"] >= 10)),
+        "recommended_action": a["recommended_action"], "intelligence": a,
+    }
+
+
 def compute_risk(c, zone: str) -> dict:
     env = c.execute("SELECT rainfall, data_source FROM environment_data WHERE zone=?", (zone,)).fetchone()
+    live = _intel_risk(c, zone, env)
+    if live:
+        return live
     rainfall = env["rainfall"] if env else 0
     data_source = env["data_source"] if env else "DEMO_SEED"
     score = rain_score(rainfall)
     reasons = [f"{'Heavy' if rainfall >= 60 else 'Moderate' if rainfall >= 20 else 'Light'} rainfall ({rainfall:g} mm)"]
 
-    rows = c.execute("SELECT * FROM incidents WHERE zone=? AND status IN ('REPORTED','VERIFIED') "
+    rows = c.execute("SELECT * FROM incidents WHERE zone=? AND duplicate_of IS NULL AND status IN ('REPORTED','VERIFIED') "
                      "AND type IN ('FLOOD','BLOCKED_ROAD')", (zone,)).fetchall()
     bonus, verified, credible = 0.0, 0, 0
     for r in rows:
@@ -256,7 +314,16 @@ def compute_risk(c, zone: str) -> dict:
         "reason": " + ".join(reasons),
         "blocked_roads": blocked_roads(c, zone),
         "data_source": data_source,
+        "probability": None,
+        "insufficient": data_source != "SIMULATED",  # a drill is a labelled simulation; anything else here means no live data yet
+        "mode": "SIMULATED DRILL" if data_source == "SIMULATED" else "NO LIVE DATA",
+        "model": "Prototype flood-risk model v2 (rule-based; legacy rainfall path)",
+        "satellite_abnormal": False, "recommended_action": ACTIONS_LEGACY.get(level_for(score)), "intelligence": None,
     }
+
+
+ACTIONS_LEGACY = {"MEDIUM": "Stay alert and check the map before you travel.", "HIGH": "Avoid potentially affected roads and follow the recommended route.",
+                  "CRITICAL": "Move away from low-lying areas and follow official instructions."}
 
 
 def blocked_roads(c, zone: str) -> list:
@@ -272,26 +339,49 @@ def blocked_roads(c, zone: str) -> list:
     return out
 
 
+ALERT_HOOK = None  # set by the API: called with (db connection, alert row, risk) when an alert is raised or escalated
+_RANK = {"LOW": 0, "MEDIUM": 1, "MODERATE": 1, "HIGH": 2, "CRITICAL": 3}
+
+
 def sync_alert(c, risk: dict):
+    """Raise, update or clear the automatic alert for a zone. Triggers: risk HIGH/CRITICAL, or abnormal satellite water
+    expansion (a MEDIUM heads-up that states it is an observation, not confirmation of flooding)."""
     zone, level = risk["location"], risk["risk_level"]
     active = c.execute("SELECT * FROM alerts WHERE affected_zone=? AND active=1 AND source='ENGINE'", (zone,)).fetchone()
-    if level in ("HIGH", "CRITICAL"):
+    severe = level in ("HIGH", "CRITICAL") and not risk.get("insufficient")
+    heads_up = not severe and bool(risk.get("satellite_abnormal"))
+    if severe or heads_up:
+        severity = level if severe else "MEDIUM"
         roads = ", ".join(risk["blocked_roads"]) or None
-        msg = f"{level.capitalize()} flood risk detected in {zone}. {risk['reason']}."
+        reason = (risk["reason"] or "").rstrip(".")
+        if severe:
+            msg = f"{severity.capitalize()} flood risk detected in {zone}. {reason}."
+        else:
+            msg = f"Satellite-detected water expansion in {zone}. {reason}. This is an observation, not confirmation of flooding."
         if risk.get("data_source") == "SIMULATED":
             msg = "SIMULATED DRILL (not a real warning): " + msg  # an admin-set demo scenario must never read as real
         if roads:
             msg += f" Reported blocked: {roads}."
+        intel = risk.get("intelligence") or {}
+        sources = json.dumps(intel.get("sources") or ([{"name": "weather", "source": risk.get("data_source")}] if risk.get("data_source") else []))
+        action = risk.get("recommended_action")
+        prob = risk.get("probability")
         if active:
-            changed = (active["severity"], active["message"], active["risk_score"]) != (level, msg, risk["risk_score"])
+            changed = (active["severity"], active["message"], active["risk_score"]) != (severity, msg, risk["risk_score"])
             if changed:
-                c.execute("UPDATE alerts SET severity=?, message=?, reason=?, affected_road=?, risk_score=?, updated_at=? WHERE id=?",
-                          (level, msg, risk["reason"], roads, risk["risk_score"], now(), active["id"]))
-            return c.execute("SELECT * FROM alerts WHERE id=?", (active["id"],)).fetchone()
+                c.execute("UPDATE alerts SET severity=?, message=?, reason=?, affected_road=?, risk_score=?, sources=?, action=?, probability=?, updated_at=? WHERE id=?",
+                          (severity, msg, risk["reason"], roads, risk["risk_score"], sources, action, prob, now(), active["id"]))
+            row = c.execute("SELECT * FROM alerts WHERE id=?", (active["id"],)).fetchone()
+            if ALERT_HOOK and _RANK.get(severity, 0) > _RANK.get(active["severity"], 0):
+                ALERT_HOOK(c, row, risk)  # escalated, e.g. HIGH -> CRITICAL
+            return row
         t = now()
-        cur = c.execute("INSERT INTO alerts(severity,message,affected_zone,active,created_at,reason,affected_road,risk_score,source,updated_at)"
-                        " VALUES(?,?,?,1,?,?,?,?,'ENGINE',?)", (level, msg, zone, t, risk["reason"], roads, risk["risk_score"], t))
-        return c.execute("SELECT * FROM alerts WHERE id=?", (cur.lastrowid,)).fetchone()
+        cur = c.execute("INSERT INTO alerts(severity,message,affected_zone,active,created_at,reason,affected_road,risk_score,source,updated_at,sources,action,probability)"
+                        " VALUES(?,?,?,1,?,?,?,?,'ENGINE',?,?,?,?)", (severity, msg, zone, t, risk["reason"], roads, risk["risk_score"], t, sources, action, prob))
+        row = c.execute("SELECT * FROM alerts WHERE id=?", (cur.lastrowid,)).fetchone()
+        if ALERT_HOOK:
+            ALERT_HOOK(c, row, risk)
+        return row
     if active:
         c.execute("UPDATE alerts SET active=0, updated_at=? WHERE id=?", (now(), active["id"]))
     return None

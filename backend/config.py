@@ -11,9 +11,14 @@ IMD_API_KEY = os.getenv("IMD_API_KEY", "").strip() or None
 KSNDMC_API_KEY = os.getenv("KSNDMC_API_KEY", "").strip() or None
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./resilienturban.db").strip()
 
-raw_cors = os.getenv("CORS_ORIGINS", "*").strip()
-if raw_cors == "*" or not raw_cors:
+# CORS only matters for browser origins (the phone app does not use it). Open ("*") for local development; when deployed behind
+# a proxy (TRUST_PROXY=1) it must be set explicitly, otherwise no browser origin is allowed.
+_proxied = os.getenv("TRUST_PROXY", "0").strip() in ("1", "true", "yes")
+raw_cors = os.getenv("CORS_ORIGINS", "" if _proxied else "*").strip()
+if raw_cors == "*":
     CORS_ORIGINS = ["*"]
+elif not raw_cors:
+    CORS_ORIGINS = ["*"] if not _proxied else []
 else:
     CORS_ORIGINS = [origin.strip() for origin in raw_cors.split(",") if origin.strip()]
 
@@ -38,3 +43,35 @@ RAIN_MODERATE_THRESHOLD = float(os.getenv("RAIN_MODERATE_THRESHOLD", "2.5"))
 HEAVY_RAIN_THRESHOLD = float(os.getenv("HEAVY_RAIN_THRESHOLD", "7.5"))
 RAIN_VERY_HEAVY_THRESHOLD = float(os.getenv("RAIN_VERY_HEAVY_THRESHOLD", "15"))
 WEATHER_MONITOR_ENABLED = os.getenv("WEATHER_MONITOR_ENABLED", "1").strip() not in ("0", "false", "no")
+
+
+# ---- Notifications (all optional; nothing is sent unless configured) ----
+APP_URL = os.getenv("APP_URL", "").strip()
+SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER", "").strip()
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+SMTP_FROM = os.getenv("SMTP_FROM", "").strip() or SMTP_USER
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "").strip()
+TWILIO_FROM = os.getenv("TWILIO_FROM", "").strip()  # an SMS-capable number, or "whatsapp:+14155238886" for WhatsApp
+PUSH_ENABLED = os.getenv("PUSH_ENABLED", "1").strip() not in ("0", "false", "no")
+SMS_MAX_RECIPIENTS = int(os.getenv("SMS_MAX_RECIPIENTS", "200"))  # safety cap per alert so a bug can never send thousands
+
+# ---- Hardening ----
+RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "1").strip() not in ("0", "false", "no")
+RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "240"))  # per client IP, all endpoints
+AUTH_RATE_LIMIT_PER_MINUTE = int(os.getenv("AUTH_RATE_LIMIT_PER_MINUTE", "20"))  # per client IP, /auth/* only
+SENTRY_DSN = os.getenv("SENTRY_DSN", "").strip()
+OVERPASS_URL = os.getenv("OVERPASS_URL", "https://overpass-api.de/api/interpreter").strip()
+
+
+# ---- Flood intelligence (satellite, terrain, river level, history) ----
+INTEL_ENABLED = os.getenv("INTEL_ENABLED", "1").strip() not in ("0", "false", "no")
+SATELLITE_REFRESH_INTERVAL = max(900, int(os.getenv("SATELLITE_REFRESH_INTERVAL", "21600")))  # 6 h; Sentinel-1 revisits ~every 6-12 days
+WATER_LEVEL_REFRESH_INTERVAL = max(900, int(os.getenv("WATER_LEVEL_REFRESH_INTERVAL", "21600")))
+SAR_WATER_THRESHOLD_DB = float(os.getenv("SAR_WATER_THRESHOLD_DB", "-16"))  # Sentinel-1 VV backscatter below this is treated as open water
+SAT_ABNORMAL_MIN_KM2 = float(os.getenv("SAT_ABNORMAL_MIN_KM2", "0.5"))  # smallest net water gain (per grid cell) called abnormal
+SAT_ABNORMAL_MIN_PCT = float(os.getenv("SAT_ABNORMAL_MIN_PCT", "40"))  # and at least this much relative to the baseline scenes
+SATELLITE_STALE_DAYS = float(os.getenv("SATELLITE_STALE_DAYS", "14"))
+PLANETARY_COMPUTER_URL = os.getenv("PLANETARY_COMPUTER_URL", "https://planetarycomputer.microsoft.com/api").strip()

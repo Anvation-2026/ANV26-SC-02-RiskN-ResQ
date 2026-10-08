@@ -8,11 +8,39 @@ import uuid
 
 import pytest
 
+os.environ.setdefault("RATE_LIMIT_ENABLED", "0")
+os.environ.setdefault("INTEL_ENABLED", "0")
 os.environ.setdefault("WEATHER_MONITOR_ENABLED", "0")  # no background polling of the real weather API in tests
 
 import db
+import notify
 
 USE_POSTGRES = os.environ.get("RISKNRESQ_TEST_BACKEND") == "postgres"
+
+
+class Outbox:
+    """Captures every outgoing push / SMS / email so tests can assert on them without touching the network."""
+    def __init__(self):
+        self.posts, self.emails = [], []
+
+
+@pytest.fixture(autouse=True)
+def outbox(monkeypatch):
+    box = Outbox()
+
+    class Resp:
+        def raise_for_status(self):
+            pass
+
+    def fake_post(url, **kw):
+        box.posts.append({"url": url, **kw})
+        return Resp()
+
+    notify._last_sent.clear()
+    monkeypatch.setattr(notify, "INLINE", True)
+    monkeypatch.setattr(notify, "_post", fake_post)
+    monkeypatch.setattr(notify, "_send_email", lambda to, subject, body: box.emails.append({"to": to, "subject": subject, "body": body}))
+    return box
 
 
 @pytest.fixture(autouse=True)

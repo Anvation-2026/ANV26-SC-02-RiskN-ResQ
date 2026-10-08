@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Image, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Header from '../../components/Header';
-import { Card, ErrorText, Pill, SmallButton, statusColor } from '../../components/ui';
+import { Card, ConfirmDialog, ErrorText, Pill, SmallButton, StateView, statusColor } from '../../components/ui';
 import { errorText } from '../../context/AuthContext';
 import usePolling from '../../hooks/usePolling';
 import { fetchIncidentPhoto, getAllIncidents, setIncident } from '../../services/accountApi';
@@ -12,6 +12,7 @@ export default function AdminIncidents() {
   const { data, error, reload } = usePolling(getAllIncidents, 6000);
   const [actionError, setActionError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [confirm, setConfirm] = useState(null);
   const [photos, setPhotos] = useState({}); // incident id -> data URI | 'loading' | 'error'
 
   const showPhoto = async (id) => {
@@ -31,7 +32,9 @@ export default function AdminIncidents() {
       <Header title="Incidents" subtitle="Verify, reject or resolve citizen reports" />
       <ScrollView contentContainerStyle={styles.body}>
         <ErrorText>{actionError || error}</ErrorText>
-        {data && data.length === 0 && <Text style={styles.line}>No incidents yet.</Text>}
+        {!data && !error ? <StateView kind="loading" /> : null}
+        {!data && error ? <StateView kind="error" title="Unable to load incident reports." message={error} onRetry={reload} /> : null}
+        {data && data.length === 0 && <StateView kind="empty" icon="shield" title="No incident reports yet." message="Community reports appear here for review." />}
         {(data || []).map((i) => (
           <Card key={i.id}>
             <View style={styles.rowBetween}>
@@ -40,6 +43,14 @@ export default function AdminIncidents() {
             </View>
             <Text style={styles.desc}>{i.description || 'No description'}</Text>
             <Text style={styles.line}>{i.zone} · trust {i.trust_score} · severity {i.severity} · {timeAgo(i.timestamp)}</Text>
+            {i.duplicate_of ? <Text style={styles.line}>Duplicate of #{i.duplicate_of} (merged into that report)</Text> : null}
+            {i.confirmations ? <Text style={styles.line}>{i.confirmations} duplicate report(s) merged into this one</Text> : null}
+            {Array.isArray(i.trust_factors) ? (
+              <View style={{ marginTop: 6 }}>
+                <Text style={styles.line}>Confidence {String(i.confidence || '').toLowerCase()} ({i.trust_score}/100), because:</Text>
+                {i.trust_factors.map((f) => <Text key={f.label} style={styles.line}>{f.points >= 0 ? '+' : ''}{f.points}  {f.label}</Text>)}
+              </View>
+            ) : null}
             {i.has_photo && (photos[i.id] && photos[i.id] !== 'loading' && photos[i.id] !== 'error' ? (
               <Image source={{ uri: photos[i.id] }} style={styles.photo} resizeMode="cover" />
             ) : (
@@ -49,12 +60,14 @@ export default function AdminIncidents() {
             ))}
             <View style={styles.actions}>
               {i.status === 'REPORTED' && <SmallButton label="Verify" color={colors.LOW} disabled={busy} onPress={() => act(i.id, 'verify')} />}
-              {i.status === 'REPORTED' && <SmallButton label="Reject" color={colors.HIGH} disabled={busy} onPress={() => act(i.id, 'reject')} />}
+              {i.status === 'REPORTED' && <SmallButton label="Reject" color={colors.HIGH} disabled={busy} onPress={() => setConfirm({ id: i.id, kind: i.type.replace('_', ' ').toLowerCase() })} />}
               {(i.status === 'REPORTED' || i.status === 'VERIFIED') && <SmallButton label="Resolve" outline disabled={busy} onPress={() => act(i.id, 'resolve')} />}
             </View>
           </Card>
         ))}
       </ScrollView>
+      <ConfirmDialog visible={!!confirm} title="Reject this report?" message={confirm ? `This ${confirm.kind} report stops counting toward risk and trust. The reporter is not notified.` : ''} confirmLabel="Reject report" danger busy={busy}
+        onCancel={() => setConfirm(null)} onConfirm={async () => { const id = confirm.id; setConfirm(null); await act(id, 'reject'); }} />
     </View>
   );
 }

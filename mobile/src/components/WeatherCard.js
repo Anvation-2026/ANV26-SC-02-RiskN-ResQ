@@ -1,7 +1,8 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Card, Label } from './ui';
-import { ago, RAIN_COLOR, RAIN_LABEL } from './rain';
+import { ago, RAIN_COLOR, rainLabel } from './rain';
+import { useT } from '../i18n';
 import { haversineKm } from '../services/geo';
 import { colors, fonts } from '../theme';
 
@@ -16,7 +17,8 @@ function nearest(monitor, at) {
 }
 
 export default function WeatherCard({ monitor, at, admin = false }) {
-  if (!monitor) return <Card><Label>{admin ? 'WEATHER MONITOR' : 'CURRENT WEATHER'}</Label><Text style={s.dim}>Weather data unavailable</Text></Card>;
+  const t = useT();
+  if (!monitor) return <Card><Label>{admin ? 'WEATHER MONITOR' : t('weather.current')}</Label><Text style={s.dim}>{t('weather.unavailable')}</Text></Card>;
   const { summary = {}, status, updated_at: updated, source, message } = monitor;
   const stale = status !== 'ok';
   const near = nearest(monitor, at);
@@ -38,20 +40,23 @@ export default function WeatherCard({ monitor, at, admin = false }) {
   }
   return (
     <Card>
-      <Label>CURRENT WEATHER</Label>
+      <Label>{t('weather.current')}</Label>
       {!here ? (
-        <Text style={s.dim}>{stale ? (message || 'Weather data unavailable') : 'Your location is outside the monitored area.'}</Text>
+        <Text style={s.dim}>{stale ? (message || t('weather.unavailable')) : t('weather.outside')}</Text>
       ) : (
         <>
           <Text style={[s.big, { color: RAIN_COLOR[level] === '#64748B' ? colors.text : RAIN_COLOR[level] }]}>
-            {level === 'HEAVY' || level === 'VERY_HEAVY' ? '🌧️ ' : ''}{RAIN_LABEL[level]}
+            {level === 'HEAVY' || level === 'VERY_HEAVY' ? '🌧️ ' : ''}{rainLabel(t, level)}
           </Text>
           <Text style={s.row}>{here.rainfall_mm.toFixed(1)} mm/h now · {(here.rainfall_24h_mm ?? 0).toFixed(1)} mm in 24 h</Text>
           <Text style={s.meta}>
-            Last updated {ago(updated)} · Source: {source}
+            {t('weather.updated')} {ago(updated)} · {t('weather.source')}: {source}
             {summary.heavy_rain_locations > 0 ? ` · Heavy rain in ${summary.heavy_rain_locations} monitored area(s)` : ''}
           </Text>
-          {stale && <Text style={s.stale}>{message || 'Weather data may be out of date'}</Text>}
+          {here.forecast_level && (here.forecast_level === 'HEAVY' || here.forecast_level === 'VERY_HEAVY') && level !== 'HEAVY' && level !== 'VERY_HEAVY' ? (
+            <Text style={s.forecast}>🌧️ {t('weather.expected', { h: here.forecast_peak_in_h })} ({here.forecast_peak_mm.toFixed(1)} mm/h)</Text>
+          ) : null}
+          {stale && <Text style={s.stale}>{message || t('weather.unavailable')}</Text>}
         </>
       )}
     </Card>
@@ -64,5 +69,6 @@ const s = StyleSheet.create({
   bold: { fontFamily: fonts.bold },
   meta: { fontFamily: fonts.medium, fontSize: 11, color: colors.muted, marginTop: 6 },
   dim: { fontFamily: fonts.medium, fontSize: 13, color: colors.muted, marginTop: 4 },
+  forecast: { fontFamily: fonts.bold, fontSize: 13, color: '#C2410C', marginTop: 8 },
   stale: { fontFamily: fonts.bold, fontSize: 12, color: '#B45309', marginTop: 6 },
 });

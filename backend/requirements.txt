@@ -5,3 +5,5 @@ httpx>=0.27.0
 python-dotenv>=1.0.0
 pytest>=8.0.0
 psycopg[binary]>=3.1
+# optional: error reporting (set SENTRY_DSN to enable)
+sentry-sdk>=2.0.0

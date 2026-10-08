@@ -104,7 +104,11 @@ def _bearer(authorization: Optional[str]) -> str:
 
 
 def user_public(row) -> dict:
-    return {"id": row["id"], "name": row["name"], "email": row["email"], "role": row["role"], "phone": row["phone"]}
+    k = row.keys() if hasattr(row, "keys") else row
+    get = lambda name, default=None: row[name] if name in k else default  # noqa: E731
+    return {"id": row["id"], "name": row["name"], "email": row["email"], "role": row["role"], "phone": row["phone"],
+            "email_verified": bool(get("email_verified", 0)), "notify_sms": bool(get("notify_sms", 0)),
+            "language": get("language")}
 
 
 def current_token(authorization: Optional[str] = Header(None)) -> str:
@@ -157,6 +161,6 @@ def ensure_admin() -> None:
             if row["role"] != ROLE_ADMIN:
                 log.error("ADMIN_EMAIL belongs to an existing non-admin account; refusing to promote it.")
             return  # an existing admin keeps its password
-        c.execute("INSERT INTO users(name, role, email, password_hash, created_at, is_active) VALUES(?,?,?,?,?,1)",
+        c.execute("INSERT INTO users(name, role, email, password_hash, created_at, is_active, email_verified) VALUES(?,?,?,?,?,1,1)",
                   (os.environ.get("ADMIN_NAME", "Super Admin"), ROLE_ADMIN, email, hash_password(password), db.now()))
         log.info("Super Admin account created for %s", email)

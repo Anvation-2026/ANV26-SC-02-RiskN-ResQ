@@ -6,7 +6,7 @@
     "paths": {
       "@/*": ["src/*"]
     },
-    "types": ["jest"],
+    "types": ["jest", "node"],
     "ignoreDeprecations": "6.0"
   },
   "include": [

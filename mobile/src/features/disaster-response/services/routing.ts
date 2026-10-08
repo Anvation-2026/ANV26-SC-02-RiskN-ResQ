@@ -6,6 +6,8 @@
 import { Road, RoadGraph, Route, RouteBlockedRoadInfo, Location } from '../types/types';
 
 const AVERAGE_EMERGENCY_SPEED_KMH = 24; // 24 km/h ~= 0.4 km/min, yielding 15 min for 6 km
+const RISK_COST_FACTOR = 0.6; // a road with risk score 100 costs 1.6x its length; BLOCKED roads are still excluded outright
+const POTENTIAL_RISK_SCORE = 50; // roads at or above this are reported as potentially affected
 
 /**
  * Returns a new list of roads with the specified road marked as BLOCKED.
@@ -25,10 +27,18 @@ export function unblockRoad(roadId: string, roads: Road[]): Road[] {
   );
 }
 
+/** Route cost of an edge: its length, scaled up by the road's flood-risk estimate when there is one. */
+function edgeCost(distanceKm: number, road?: Road): number {
+  const risk = road?.riskScore ?? 0;
+  return distanceKm * (1 + (RISK_COST_FACTOR * Math.min(100, Math.max(0, risk))) / 100);
+}
+
 interface GraphAdjacencyItem {
   neighbor: string;
   distanceKm: number;
   roadId: string;
+  /** distance weighted by the road's flood-risk estimate: what Dijkstra minimises */
+  cost: number;
 }
 
 /**
@@ -75,6 +85,7 @@ export function findRecommendedRoute(
         neighbor: edge.to,
         distanceKm: edge.distanceKm,
         roadId: edge.roadId,
+        cost: edgeCost(edge.distanceKm, road),
       });
 
       // Bi-directional connectivity
@@ -82,17 +93,21 @@ export function findRecommendedRoute(
         neighbor: edge.from,
         distanceKm: edge.distanceKm,
         roadId: edge.roadId,
+        cost: edgeCost(edge.distanceKm, road),
       });
     }
   }
 
   // Dijkstra's algorithm
-  const distances = new Map<string, number>();
+  const distances = new Map<string, number>(); // risk-weighted cost
+  const km = new Map<string, number>(); // real distance along the cheapest path
+  const viaRoad = new Map<string, string>(); // road used to reach each node
   const previous = new Map<string, string | null>();
   const unvisited = new Set<string>();
 
   for (const nodeId of Object.keys(graph.nodes)) {
     distances.set(nodeId, Number.POSITIVE_INFINITY);
+    km.set(nodeId, 0);
     previous.set(nodeId, null);
     unvisited.add(nodeId);
   }
@@ -122,11 +137,13 @@ export function findRecommendedRoute(
     unvisited.delete(current);
 
     const neighbors = adjacency.get(current) || [];
-    for (const { neighbor, distanceKm } of neighbors) {
+    for (const { neighbor, distanceKm, cost, roadId } of neighbors) {
       if (unvisited.has(neighbor)) {
-        const alt = shortestDist + distanceKm;
+        const alt = shortestDist + cost;
         if (alt < (distances.get(neighbor) ?? Number.POSITIVE_INFINITY)) {
           distances.set(neighbor, alt);
+          km.set(neighbor, (km.get(current) ?? 0) + distanceKm);
+          viaRoad.set(neighbor, roadId);
           previous.set(neighbor, current);
         }
       }
@@ -157,7 +174,7 @@ export function findRecommendedRoute(
     curr = previous.get(curr) ?? null;
   }
 
-  const roundedDistance = Math.round(destinationDistance * 10) / 10;
+  const roundedDistance = Math.round((km.get(destinationNode) ?? destinationDistance) * 10) / 10;
   const etaMinutes = Math.max(1, Math.round((roundedDistance / AVERAGE_EMERGENCY_SPEED_KMH) * 60));
 
   // Determine if this route is a detour avoiding blocked roads
@@ -166,6 +183,20 @@ export function findRecommendedRoute(
   const reason = hasAvoidedBlocks
     ? 'Avoids reported blocked road'
     : 'Direct primary corridor via shortest path';
+
+  // Flood-risk estimates along the chosen path (only present when the caller supplied riskScore on roads)
+  const usedRoads: Road[] = [];
+  for (const nodeId of path.slice(1)) {
+    const road = roadStatusMap.get(viaRoad.get(nodeId) ?? '');
+    if (road) usedRoads.push(road);
+  }
+  const scored = usedRoads.filter((r) => typeof r.riskScore === 'number');
+  const riskInformation = scored.length
+    ? {
+        meanRiskScore: Math.round((scored.reduce((a, r) => a + (r.riskScore ?? 0), 0) / scored.length) * 10) / 10,
+        potentiallyAffectedRoads: scored.filter((r) => (r.riskScore ?? 0) >= POTENTIAL_RISK_SCORE).map((r) => r.name),
+      }
+    : undefined;
 
   // Construct coordinate polyline for map display
   const coordinates: Location[] = path
@@ -181,7 +212,10 @@ export function findRecommendedRoute(
     etaMinutes,
     blockedRoads: blockedRoadsCatalog,
     reason,
-    safetyNote: 'Recommended alternative route based on available incident data.',
+    safetyNote: riskInformation
+      ? 'Recommended alternative route based on current environmental and incident data.'
+      : 'Recommended alternative route based on available incident data.',
     coordinates,
+    ...(riskInformation ? { riskInformation } : {}),
   };
 }

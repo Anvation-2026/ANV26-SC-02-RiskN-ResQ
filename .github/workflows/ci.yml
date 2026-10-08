@@ -1,0 +1,68 @@
+name: CI
+on:
+  push: { branches: [main] }
+  pull_request:
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: ci, POSTGRES_PASSWORD: ci, POSTGRES_DB: risknresq_test }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ci" --health-interval 5s --health-timeout 5s --health-retries 10
+    defaults: { run: { working-directory: backend } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r requirements.txt -r requirements-ml.txt
+      - name: Tests on SQLite
+        run: python -m pytest -q
+      - name: Tests on PostgreSQL (each test gets its own temporary schema)
+        env:
+          RISKNRESQ_TEST_BACKEND: postgres
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/risknresq_test
+        run: python -m pytest -q
+  mobile:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: mobile } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npx jest --runInBand
+      - run: npx expo-doctor
+      - run: npx expo export --platform ios --output-dir /tmp/export-ios
+      - run: npx expo export --platform android --output-dir /tmp/export-android
+  e2e:
+    # Real browser tests of the three roles against an isolated backend (its own database file and test admin). The data
+    # providers are the real ones, so this job needs internet access; provider outages show up as honest "unavailable" states.
+    runs-on: ubuntu-latest
+    needs: [backend, mobile]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - run: pip install -r backend/requirements.txt
+      - run: npm ci
+        working-directory: mobile
+      - run: npx playwright install --with-deps chromium
+        working-directory: mobile
+      - name: Start the isolated backend and load real provider data
+        working-directory: backend
+        env: { DATABASE_URL: "sqlite:///./e2e.db" }
+        run: |
+          scripts/e2e_backend.sh start
+          scripts/e2e_backend.sh bootstrap || true
+      - name: Browser end-to-end tests
+        working-directory: mobile
+        run: npx playwright test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with: { name: e2e-failures, path: mobile/test-results }

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import Header from '../../components/Header';
 import ActionButton from '../../components/ActionButton';
-import { Card, ErrorText, Label, Segmented } from '../../components/ui';
+import { Card, ErrorText, Label, Notice, Segmented, StateView } from '../../components/ui';
 import { Fact, PriorityBadge, RequestCard } from '../../components/RequestCards';
 import { useVolunteer } from '../../context/VolunteerContext';
 import { formatDistance } from '../../features/disaster-response/utils/distance';
@@ -22,11 +22,13 @@ export default function VolunteerRequests({ navigate, active }) {
   const list = tab === 'active' ? reqs.assigned : reqs.completed;
   const item = [...reqs.assigned, ...reqs.completed].find((r) => r.match_id === selected);
 
-  const run = async (fn, failText) => {
+  const [notice, setNotice] = useState(null);
+  const run = async (fn, failText, okText) => {
     setBusy(true);
     setMsg('');
     const r = await fn();
     if (!r.ok) setMsg(r.message || failText);
+    else if (okText) setNotice({ id: Date.now(), text: okText });
     setBusy(false);
   };
 
@@ -37,12 +39,14 @@ export default function VolunteerRequests({ navigate, active }) {
         <Header title="Request details" subtitle={`${prettyResource(item.type)} · #${item.request_id}`} />
         <ScrollView contentContainerStyle={s.body}>
           <ErrorText>{msg}</ErrorText>
+          {notice ? <Notice key={notice.id} onDone={() => setNotice(null)}>{notice.text}</Notice> : null}
           <Card>
             <View style={s.top}><Text style={s.type}>{prettyResource(item.type)}</Text><PriorityBadge priority={item.priority} /></View>
             <Label>STATUS</Label>
             <Text style={s.value}>{toAccept ? 'ASSIGNED (waiting for you to accept)' : item.match_status}</Text>
             <Label>LOCATION</Label>
             <Text style={s.value}>{item.zone || 'Unknown zone'}{item.latitude != null ? ` · ${item.latitude.toFixed(4)}, ${item.longitude.toFixed(4)}` : ''}</Text>
+            {item.quantity > 1 ? (<><Label>QUANTITY NEEDED</Label><Text style={s.value}>{item.quantity}</Text></>) : null}
             <Label>DISTANCE</Label>
             <Text style={s.value}>{item.distance_km != null ? `${formatDistance(item.distance_km)} from you` : 'Unknown'}</Text>
             <Label>REQUESTED</Label>
@@ -52,9 +56,9 @@ export default function VolunteerRequests({ navigate, active }) {
           {item.match_status !== 'COMPLETED' && (
             <View style={{ gap: 10 }}>
               {toAccept && <ActionButton variant="primary" label={busy ? 'ACCEPTING…' : 'ACCEPT'} disabled={busy} color={colors.LOW}
-                onPress={() => run(() => accept(item.match_id), 'Unable to accept request. Please try again.')} />}
+                onPress={() => run(() => accept(item.match_id), 'Unable to accept request. Please try again.', 'Request accepted. The person who asked can see that you are on the way.')} />}
               {item.match_status === 'ACCEPTED' && <ActionButton variant="primary" label={busy ? 'SAVING…' : 'MARK AS COMPLETED'} disabled={busy} color={colors.LOW}
-                onPress={() => run(async () => { const r = await complete(item.match_id); if (r.ok) setSelected(null); return r; }, 'Unable to complete request. Please try again.')} />}
+                onPress={() => run(async () => { const r = await complete(item.match_id); if (r.ok) setSelected(null); return r; }, 'Unable to complete request. Please try again.', 'Request marked as completed. Thank you for helping.')} />}
               <ActionButton variant="primary" label="SHOW ON MAP" color={colors.route} onPress={() => navigate('Map', { requestId: item.request_id })} />
             </View>
           )}
@@ -70,8 +74,9 @@ export default function VolunteerRequests({ navigate, active }) {
       <ScrollView contentContainerStyle={s.body}>
         <Segmented options={[['active', `Active (${reqs.assigned.length})`], ['done', `Completed (${reqs.stats.completed})`]]} value={tab} onChange={setTab} />
         <ErrorText>{error ? `${error} Showing the last data received.` : ''}</ErrorText>
-        {loading ? <Text style={s.hint}>Loading…</Text> : list.length === 0 ? (
-          <Card><Text style={s.hint}>{tab === 'active' ? 'No requests are assigned to you right now.' : 'You have not completed any requests yet.'}</Text></Card>
+        {notice ? <Notice key={notice.id} onDone={() => setNotice(null)}>{notice.text}</Notice> : null}
+        {loading ? <StateView kind="loading" /> : list.length === 0 ? (
+          <StateView kind="empty" icon="inbox" title={tab === 'active' ? 'No requests are assigned to you right now.' : 'You have not completed any requests yet.'} message={tab === 'active' ? 'New requests appear here the moment you are matched.' : undefined} />
         ) : list.map((r) => (
           <RequestCard key={r.match_id} item={r} onPress={() => setSelected(r.match_id)} highlight={r.priority === 'CRITICAL' || r.priority === 'HIGH'}>
             <ActionButton variant="primary" label="VIEW DETAILS" color={colors.primary} onPress={() => setSelected(r.match_id)} />

@@ -9,6 +9,7 @@ export default function Header({ title, subtitle, right, children }) {
 
   return (
     <View style={[styles.wrap, { paddingTop }]}>
+      <View style={styles.glow} pointerEvents="none" />
       <View style={styles.row}>
         <View style={{ flex: 1 }}>
           <Text style={styles.title}>{title}</Text>
@@ -22,7 +23,9 @@ export default function Header({ title, subtitle, right, children }) {
 }
 
 const styles = StyleSheet.create({
+  glow: { position: 'absolute', top: -70, right: -50, width: 190, height: 190, borderRadius: 95, backgroundColor: 'rgba(34,211,238,0.10)' },
   wrap: {
+    overflow: 'hidden',
     backgroundColor: colors.navy,
     paddingHorizontal: 18,
     paddingBottom: 14,

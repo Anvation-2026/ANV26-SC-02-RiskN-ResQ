@@ -48,3 +48,37 @@ export async function fetchIncidentPhoto(id) {
     reader.readAsDataURL(blob);
   });
 }
+
+// ── account recovery and preferences ──
+export const forgotPassword = (email) => http('/auth/forgot-password', { method: 'POST', body: { email } });
+export const resetPassword = (email, code, new_password) => http('/auth/reset-password', { method: 'POST', body: { email, code, new_password } });
+export const verifyEmail = (code) => http('/auth/verify-email', { method: 'POST', body: { code } });
+export const resendVerification = () => http('/auth/resend-verification', { method: 'POST' });
+export const updatePreferences = (body) => http('/me/preferences', { method: 'PATCH', body });
+export const saveMyLocation = (latitude, longitude) => http('/me/location', { method: 'POST', body: { latitude, longitude } });
+export const trackRequest = (id) => http(`/help-requests/${id}/tracking`);
+
+// ── admin tools ──
+export const getAnalytics = () => http('/admin/analytics');
+export const getAudit = () => http('/admin/audit?limit=60');
+export const getSystem = () => http('/admin/system');
+export const sendBroadcast = (body) => http('/admin/broadcast', { method: 'POST', body });
+export const clearBroadcast = (id) => http(`/admin/broadcast/${id}/clear`, { method: 'POST' });
+export const importOsmRoads = () => http('/admin/roads/import-osm', { method: 'POST' });
+export const importOsmPlaces = () => http('/admin/places/import-osm', { method: 'POST' });
+
+// CSV export: fetched with the login token, returned as text for the screen to save or share.
+export async function fetchCsv(kind) {
+  const res = await fetch(`${API_BASE_URL}/admin/export/${kind}.csv`, { headers: { Authorization: `Bearer ${getToken()}` } });
+  if (!res.ok) throw Object.assign(new Error('Export failed'), { status: res.status, detail: 'Export failed' });
+  return res.text();
+}
+
+// ── flood intelligence (admin) ──
+export const getProviders = () => http('/admin/providers');
+export const refreshIntelligence = (jobs) => http('/admin/intelligence/refresh', { method: 'POST', body: jobs ? { jobs } : {} });
+export const getRiskHistory = (hours = 12) => http(`/risk-history?hours=${hours}`);
+export const getPositioning = () => http('/admin/positioning');
+export const getResources = () => http('/admin/resources');
+export const getMlStatus = () => http('/admin/ml/status');
+export const getHistoricalEvents = () => http('/admin/historical-events');

@@ -2,6 +2,7 @@ import React from 'react';
 import { Image, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Header from '../../components/Header';
 import ActionButton from '../../components/ActionButton';
+import DeviceCheck from '../../components/DeviceCheck';
 import { Card, Label, Pill } from '../../components/ui';
 import { useAuth } from '../../context/AuthContext';
 import { useVolunteer } from '../../context/VolunteerContext';
@@ -33,6 +34,7 @@ export default function VolunteerAccount() {
           <Label>RESOURCE / SKILL</Label>
           <Text style={s.value}>{volunteer ? prettyResource(volunteer.skill) : '—'}</Text>
         </Card>
+        <DeviceCheck />
         <Text style={s.note}>Your role and permissions are set by an administrator and cannot be changed here.</Text>
         <ActionButton variant="primary" label="LOG OUT" color={colors.navy} onPress={logout} />
       </ScrollView>

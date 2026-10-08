@@ -1,6 +1,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { apiLogin, apiLogout, apiMe, apiRegister } from '../services/accountApi';
 import { clearToken, loadToken, saveToken, setUnauthorizedHandler } from '../services/session';
+import { registerForPush, unregisterPush } from '../services/push';
+import { useLang } from '../i18n';
 
 const AuthContext = createContext(null);
 export const useAuth = () => useContext(AuthContext);
@@ -10,6 +12,9 @@ export const errorText = (e) => (e && e.status ? e.detail || e.message : 'Cannot
 
 export function AuthProvider({ children }) {
   const [state, setState] = useState({ status: 'loading', user: null, notice: null });
+  const { setLang } = useLang();
+  // after sign-in: use the language saved on the account and register this phone for alerts (both best effort)
+  const onSignedIn = useCallback((user) => { if (user && user.language) setLang(user.language); registerForPush(); }, [setLang]);
 
   const signOutLocally = useCallback(async (notice = null) => {
     await clearToken();
@@ -23,19 +28,22 @@ export function AuthProvider({ children }) {
       const token = await loadToken();
       if (!token) return setState({ status: 'out', user: null, notice: null });
       try {
-        setState({ status: 'in', user: await apiMe(), notice: null });
+        const me = await apiMe();
+        setState({ status: 'in', user: me, notice: null });
+        onSignedIn(me);
       } catch (e) {
         if (e && e.status) await clearToken();
         setState({ status: 'out', user: null, notice: e && e.status ? null : errorText(e) });
       }
     })();
-  }, [signOutLocally]);
+  }, [signOutLocally, onSignedIn]);
 
   const login = useCallback(async (email, password) => {
     const data = await apiLogin(email.trim(), password); // throws with a readable message on failure
     await saveToken(data.token);
     setState({ status: 'in', user: data.user, notice: null });
-  }, []);
+    onSignedIn(data.user);
+  }, [onSignedIn]);
 
   const register = useCallback(async (form) => {
     await apiRegister(form); // the role is decided by the server; the client cannot send one
@@ -43,9 +51,12 @@ export function AuthProvider({ children }) {
   }, [login]);
 
   const logout = useCallback(async () => {
+    await unregisterPush();
     try { await apiLogout(); } catch (e) { /* token may already be invalid */ }
     await signOutLocally();
   }, [signOutLocally]);
 
-  return <AuthContext.Provider value={{ ...state, login, register, logout }}>{children}</AuthContext.Provider>;
+  const updateUser = useCallback((patch) => setState((s) => (s.user ? { ...s, user: { ...s.user, ...patch } } : s)), []);
+
+  return <AuthContext.Provider value={{ ...state, login, register, logout, updateUser }}>{children}</AuthContext.Provider>;
 }

@@ -89,7 +89,7 @@ export function ResponseProvider({ children }) {
           reason: (res.avoidedIncidents || []).length > 0
             ? 'Avoids reported blocked road'
             : 'Optimal street network path',
-          safetyNote: res.safetyNote || 'Recommended alternative route based on available route and incident data.',
+          safetyNote: res.safetyNote || 'Recommended alternative route based on current environmental and incident data.',
           source: res.source,
         };
         setRoute(transformedRoute);
@@ -120,7 +120,7 @@ export function ResponseProvider({ children }) {
   }, [userLocation, destinationVolunteer, liveVolunteers]);
 
   // Request help & match with real volunteer responder
-  const requestResource = useCallback(async (name = resource, priority = 'HIGH') => {
+  const requestResource = useCallback(async (name = resource, priority = 'HIGH', quantity = 1, idempotencyKey) => {
     if (!userLocation) {
       return { matched: false, failed: true, message: 'Your location is required to request help. Turn on location and try again.' };
     }
@@ -129,6 +129,8 @@ export function ResponseProvider({ children }) {
       const result = await apiRequestHelp({
         type: name,
         priority,
+        quantity,
+        idempotencyKey,
         latitude: userLocation.latitude,
         longitude: userLocation.longitude,
         userId: user ? user.id : undefined,

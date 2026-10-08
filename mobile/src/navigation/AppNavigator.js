@@ -3,6 +3,8 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Feather from '@expo/vector-icons/Feather';
 import { useData } from '../context/DataContext';
+import { useT } from '../i18n';
+import { ScreenFade } from '../components/motion';
 import { colors } from '../theme';
 import HomeScreen from '../screens/HomeScreen';
 import MapScreen from '../screens/MapScreen';
@@ -24,6 +26,7 @@ export default function AppNavigator() {
   const [active, setActive] = useState('Home');
   const insets = useSafeAreaInsets();
   const { alerts } = useData();
+  const t18 = useT();
 
   const bottomPadding = Math.max(insets.bottom, 10);
 
@@ -32,7 +35,7 @@ export default function AppNavigator() {
       <View style={styles.screenContainer}>
         {TABS.map(({ key, Screen }) => (
           <View key={key} style={[StyleSheet.absoluteFill, active !== key && styles.hiddenScreen]}>
-            <Screen navigate={setActive} />
+            <ScreenFade active={active === key}><Screen navigate={setActive} /></ScreenFade>
           </View>
         ))}
       </View>
@@ -49,6 +52,10 @@ export default function AppNavigator() {
               style={styles.tab}
               onPress={() => setActive(t.key)}
               hitSlop={6}
+              accessibilityRole="tab"
+              accessibilityLabel={t18(`tab.${t.key}`)}
+              accessibilityState={{ selected: isActive }}
+              aria-selected={isActive}
             >
               <View style={styles.iconContainer}>
                 <Feather
@@ -70,7 +77,7 @@ export default function AppNavigator() {
                   isActive ? styles.labelOn : styles.labelOff,
                 ]}
               >
-                {t.label}
+                {t18(`tab.${t.key}`)}
               </Text>
               {isActive && <View style={styles.activeDot} />}
             </Pressable>

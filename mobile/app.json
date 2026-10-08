@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "RiskN ResQ",
-    "slug": "resilienturban",
+    "slug": "riskn-resq",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -17,7 +17,11 @@
     },
     "android": {
       "package": "in.resq.riskn",
-      "permissions": ["ACCESS_COARSE_LOCATION", "ACCESS_FINE_LOCATION", "CAMERA"],
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "CAMERA"
+      ],
       "adaptiveIcon": {
         "backgroundColor": "#0B1F33",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -48,7 +52,17 @@
       ],
       [
         "expo-splash-screen",
-        { "image": "./assets/splash-icon.png", "imageWidth": 200, "backgroundColor": "#0B1F33" }
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 200,
+          "backgroundColor": "#0B1F33"
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#0B1F33"
+        }
       ]
     ]
   }

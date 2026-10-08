@@ -3,13 +3,16 @@
  * Communicates directly with the FastAPI real-data backend with bearer token session support.
  * Zero hardcoded synthetic demo data or fake coordinates in live operations.
  */
-import { API_BASE_URL, REQUEST_TIMEOUT_MS } from '../config/api';
+import { API_BASE_URL, API_CONFIGURED, REQUEST_TIMEOUT_MS } from '../config/api';
 import { getToken, notifyUnauthorized } from './session';
 
 let source = 'live';
 export const getSource = () => source;
 
 export async function http(path, options = {}) {
+  if (!API_CONFIGURED) {  // a release build that was never given a server address
+    throw Object.assign(new Error('not configured'), { status: 503, detail: 'This build has no server address. Set EXPO_PUBLIC_API_URL to your https:// backend and rebuild.' });
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   const token = getToken();
@@ -108,7 +111,9 @@ export async function getIncidents(latitude, longitude, radiusKm = 25.0) {
   return await http(url);
 }
 
-export async function submitIncident({ type, description, latitude, longitude, severity = 3 }) {
+export const newRequestKey = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
+export async function submitIncident({ type, description, latitude, longitude, severity = 3, idempotencyKey }) {
   if (typeof latitude !== 'number' || typeof longitude !== 'number') {
     throw new Error('GPS coordinates are required to submit an incident.');
   }
@@ -128,7 +133,7 @@ export async function submitIncident({ type, description, latitude, longitude, s
     reportedBy: 'Citizen Reporter',
   };
 
-  return await http('/incidents', { method: 'POST', body });
+  return await http('/incidents', { method: 'POST', body, headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined });
 }
 
 // ── 4. REAL INCIDENT-AWARE ROUTING ──────────────────────────────────────
@@ -184,7 +189,7 @@ export async function updateVolunteerLocation(volunteerId, latitude, longitude) 
 let lastMatch = null;
 export const getMatch = () => lastMatch;
 
-export async function requestHelp({ type, priority = 'HIGH', latitude, longitude, userId }) {
+export async function requestHelp({ type, priority = 'HIGH', latitude, longitude, userId, quantity = 1, idempotencyKey }) {
   if (typeof latitude !== 'number' || typeof longitude !== 'number') {
     throw new Error('GPS coordinates are required to request emergency assistance.');
   }
@@ -193,11 +198,13 @@ export async function requestHelp({ type, priority = 'HIGH', latitude, longitude
     ...(userId != null ? { userId } : {}), // the signed-in user's own id (no hard-coded user)
     type,
     priority,
+    quantity,
     latitude,
     longitude,
   };
 
-  const response = await http('/help-requests', { method: 'POST', body });
+  // the same key for the same form: a double tap or a retry after a timeout returns the first request instead of making a second
+  const response = await http('/help-requests', { method: 'POST', body, headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined });
   lastMatch = response;
   return response;
 }
@@ -206,6 +213,26 @@ export async function requestHelp({ type, priority = 'HIGH', latitude, longitude
 // Rainfall across the monitored grid, served from the backend cache (the phone never calls the weather API).
 export async function getWeatherMonitoring() {
   return http('/weather/monitoring');
+}
+
+// Hospitals and shelters (admin-added or imported from OpenStreetMap), nearest first when a position is given.
+export async function getPlaces(latitude, longitude) {
+  const q = latitude != null && longitude != null ? `?latitude=${latitude}&longitude=${longitude}&radius_km=40&limit=60` : '?limit=60';
+  return http(`/places${q}`);
+}
+
+// Everything the map and Home need from the flood-intelligence layer in one cached read (never calls a weather or satellite service).
+export async function getIntelligenceOverview(latitude, longitude) {
+  const q = latitude != null && longitude != null ? `?latitude=${latitude}&longitude=${longitude}` : '';
+  return http(`/intelligence/overview${q}`);
+}
+
+export async function getFloodRiskAt(latitude, longitude) {
+  return http(`/flood-risk?latitude=${latitude}&longitude=${longitude}`);
+}
+
+export async function getNearestEvacuation(latitude, longitude) {
+  return http(`/evacuation/nearest?latitude=${latitude}&longitude=${longitude}`);
 }
 
 export async function getZoneAlerts() {
@@ -217,29 +244,30 @@ export async function getRoadStatus() {
   return await http('/roads');
 }
 
-// Uploads the chosen image to the backend as raw bytes. Resolves only when the server confirmed it stored the photo.
-export async function uploadIncidentPhoto(incidentId, uri) {
+// Uploads the chosen image to the backend as raw bytes. Resolves only when the server confirmed it stored the photo, with where it
+// was stored ("cloudinary" or "local"). `onProgress(0-100)` reports real bytes sent (XMLHttpRequest, which fetch cannot do).
+export async function uploadIncidentPhoto(incidentId, uri, onProgress) {
+  if (!API_CONFIGURED) throw Object.assign(new Error('not configured'), { status: 503, detail: 'This build has no server address.' });
   const blob = await (await fetch(uri)).blob();
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 30000);
-  try {
-    const res = await fetch(`${API_BASE_URL}/incidents/${incidentId}/photo`, {
-      method: 'POST',
-      headers: { 'Content-Type': blob.type || 'application/octet-stream', Authorization: `Bearer ${getToken()}` },
-      body: blob,
-      signal: controller.signal,
-    });
-    if (!res.ok) {
-      let detail = null;
-      try { const b = await res.json(); detail = typeof b.detail === 'string' ? b.detail : null; } catch (e) { /* not JSON */ }
-      const err = new Error(detail || `Upload failed (${res.status})`);
-      err.status = res.status;
-      err.detail = detail;
-      if (res.status === 401) notifyUnauthorized();
-      throw err;
-    }
-    return await res.json();
-  } finally {
-    clearTimeout(timer);
-  }
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${API_BASE_URL}/incidents/${incidentId}/photo`);
+    xhr.timeout = 45000;
+    xhr.setRequestHeader('Content-Type', blob.type || 'application/octet-stream');
+    xhr.setRequestHeader('Authorization', `Bearer ${getToken()}`);
+    if (xhr.upload && onProgress) xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100)); };
+    const fail = (message) => reject(Object.assign(new Error(message), { detail: message }));
+    xhr.onerror = () => fail('Could not reach the server. The report is saved; try the photo again.');
+    xhr.ontimeout = () => fail('The upload took too long. The report is saved; try the photo again.');
+    xhr.onload = () => {
+      let body = null;
+      try { body = JSON.parse(xhr.responseText); } catch (e) { /* not JSON */ }
+      if (xhr.status >= 200 && xhr.status < 300) { if (onProgress) onProgress(100); return resolve(body || {}); }
+      const detail = body && typeof body.detail === 'string' ? body.detail : null;
+      const err = Object.assign(new Error(detail || `Upload failed (${xhr.status})`), { status: xhr.status, detail });
+      if (xhr.status === 401) notifyUnauthorized();
+      reject(err);
+    };
+    xhr.send(blob);
+  });
 }

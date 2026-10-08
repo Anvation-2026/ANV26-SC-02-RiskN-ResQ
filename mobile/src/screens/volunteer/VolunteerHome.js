@@ -3,7 +3,8 @@ import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 import Feather from '@expo/vector-icons/Feather';
 import Header from '../../components/Header';
 import ActionButton from '../../components/ActionButton';
-import { Card, ErrorText, Label, SmallButton } from '../../components/ui';
+import { Card, ErrorText, Label, SmallButton, MetricCard, Notice, SkeletonCard } from '../../components/ui';
+import { FadeIn, Pulse } from '../../components/motion';
 import { RequestCard } from '../../components/RequestCards';
 import { useAuth } from '../../context/AuthContext';
 import { useVolunteer } from '../../context/VolunteerContext';
@@ -24,11 +25,13 @@ export default function VolunteerHome({ navigate }) {
   const [busy, setBusy] = React.useState(false);
   const [msg, setMsg] = React.useState('');
 
-  const run = async (fn) => {
+  const [notice, setNotice] = React.useState(null);
+  const run = async (fn, okText) => {
     setBusy(true);
     setMsg('');
     const r = await fn();
     if (!r.ok) setMsg(r.message);
+    else if (okText) setNotice({ id: Date.now(), text: okText });
     setBusy(false);
   };
 
@@ -41,31 +44,34 @@ export default function VolunteerHome({ navigate }) {
       <ScrollView contentContainerStyle={s.body}>
         <ErrorText>{error ? `${error} Showing the last data received.` : ''}</ErrorText>
         <ErrorText>{msg}</ErrorText>
+        {notice ? <Notice key={notice.id} onDone={() => setNotice(null)}>{notice.text}</Notice> : null}
 
         {newIds.length > 0 && (
-          <Pressable style={s.newBanner} onPress={() => navigate('Requests')}>
-            <Feather name="bell" size={16} color="#fff" />
-            <Text style={s.newText}>New help request assigned. Tap to view.</Text>
-          </Pressable>
+          <FadeIn from="down">
+            <Pressable style={s.newBanner} onPress={() => navigate('Requests')} accessibilityRole="button">
+              <Pulse min={0.5}><Feather name="bell" size={16} color="#fff" /></Pulse>
+              <Text style={s.newText}>New help request assigned. Tap to view.</Text>
+            </Pressable>
+          </FadeIn>
         )}
 
         <Card>
           <Label>STATUS</Label>
           <View style={s.statusRow}>
-            <View style={[s.dot, { backgroundColor: available ? colors.LOW : colors.HIGH }]} />
+            <Pulse active={available} min={0.35} duration={1000}><View style={[s.dot, { backgroundColor: available ? colors.LOW : colors.HIGH }]} /></Pulse>
             <Text style={[s.statusText, { color: available ? colors.LOW : colors.HIGH }]}>{available ? 'AVAILABLE' : 'UNAVAILABLE'}</Text>
           </View>
           <Text style={s.hint}>{available ? 'You can be matched to new help requests.' : 'You will not be matched to new requests while unavailable.'}</Text>
           <View style={{ marginTop: 12 }}>
             <ActionButton variant="primary" disabled={busy || loading || !volunteer} color={available ? colors.HIGH : colors.LOW}
-              label={available ? 'GO UNAVAILABLE' : 'GO AVAILABLE'} onPress={() => run(() => setAvailable(!available))} />
+              label={available ? 'GO UNAVAILABLE' : 'GO AVAILABLE'} onPress={() => run(() => setAvailable(!available), available ? 'You are now unavailable. No new requests will be assigned.' : 'You are now available for new requests.')} />
           </View>
         </Card>
 
         <View style={s.stats}>
-          <Stat label="Assigned" value={reqs.stats.assigned} onPress={() => navigate('Requests')} />
-          <Stat label="Nearby" value={reqs.stats.nearby} onPress={() => navigate('Nearby')} />
-          <Stat label="Completed" value={reqs.stats.completed} onPress={() => navigate('Requests')} />
+          <MetricCard label="ASSIGNED" value={reqs.stats.assigned} color={colors.primary} icon="inbox" delay={60} onPress={() => navigate('Requests')} />
+          <MetricCard label="NEARBY" value={reqs.stats.nearby} color={colors.MEDIUM} icon="crosshair" delay={120} onPress={() => navigate('Nearby')} />
+          <MetricCard label="COMPLETED" value={reqs.stats.completed} color={colors.LOW} icon="check-circle" delay={180} onPress={() => navigate('Requests')} />
         </View>
 
         <Card>
@@ -81,12 +87,12 @@ export default function VolunteerHome({ navigate }) {
             <Text style={s.locText}>{hasLocation ? `${volunteer.latitude.toFixed(4)}, ${volunteer.longitude.toFixed(4)}` : 'Location unavailable'}</Text>
           </View>
           <View style={{ marginTop: 10, alignSelf: 'flex-start' }}>
-            <SmallButton label="Update from my GPS" outline disabled={busy} onPress={() => run(updateLocationFromGps)} />
+            <SmallButton label="Update from my GPS" outline disabled={busy} onPress={() => run(updateLocationFromGps, 'Your location was updated from GPS.')} />
           </View>
         </Card>
 
         <Text style={s.section}>Next request</Text>
-        {loading ? <Text style={s.hint}>Loading…</Text> : first ? (
+        {loading ? <SkeletonCard lines={3} /> : first ? (
           <RequestCard item={first} highlight onPress={() => navigate('Requests')} />
         ) : (
           <Card><Text style={s.hint}>{available ? 'No requests assigned right now.' : 'You are unavailable, so no requests will be assigned.'}</Text></Card>
