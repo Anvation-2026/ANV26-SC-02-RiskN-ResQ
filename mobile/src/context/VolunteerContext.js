@@ -2,7 +2,18 @@
 // except which assignments the volunteer has already looked at (used only for the "new request" indicator).
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { errorText } from './AuthContext';
-import { claimRequest, acceptMatch, completeMatch, getMyRequests, getMyVolunteer, patchMyVolunteer } from '../services/accountApi';
+import {
+  claimRequest,
+  acceptMatch,
+  completeMatch,
+  getMyRequests,
+  getMyVolunteer,
+  patchMyVolunteer,
+  enRouteRequest,
+  arrivedRequest,
+  rejectHelpRequest,
+  cancelHelpRequest,
+} from '../services/accountApi';
 import { checkLocationPermission, getLiveCurrentPosition, requestLocationPermission } from '../services/locationService';
 
 const VolunteerContext = createContext(null);
@@ -70,6 +81,10 @@ export function VolunteerProvider({ children }) {
     accept: (matchId) => act(() => acceptMatch(matchId)),
     complete: (matchId) => act(() => completeMatch(matchId)),
     claim: (requestId) => act(() => claimRequest(requestId)),
+    enRoute: (requestId) => act(() => enRouteRequest(requestId)),
+    arrived: (requestId) => act(() => arrivedRequest(requestId)),
+    reject: (requestId) => act(() => rejectHelpRequest(requestId)),
+    cancel: (requestId, reason) => act(() => cancelHelpRequest(requestId, reason)),
     // Location comes from the phone's GPS when permission is given; otherwise the saved location is kept.
     updateLocationFromGps: async () => {
       try {

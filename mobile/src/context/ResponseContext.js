@@ -20,13 +20,23 @@ export function cleanResource(v) {
   return text.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase());
 }
 
-export const RESOURCES = ['Medicine', 'Food', 'Water', 'First Aid', 'Evacuation'];
+export const RESOURCES = [
+  'Medical Emergency',
+  'Flood Rescue',
+  'Evacuation',
+  'Elderly Assistance',
+  'Child Assistance',
+  'Food / Water',
+  'Transport',
+  'First Aid',
+  'Other Emergency',
+];
 
 export function ResponseProvider({ children }) {
   const { userLocation, risk, volunteers: liveVolunteers, blocked, refresh } = useData();
   const { user } = useAuth();
 
-  const [resource, setResource] = useState('Medicine');
+  const [resource, setResource] = useState('Medical Emergency');
   const [match, setMatch] = useState(null);
   const [route, setRoute] = useState(null);
   const [destinationVolunteer, setDestinationVolunteer] = useState(null);
@@ -79,6 +89,7 @@ export function ResponseProvider({ children }) {
       if (res && res.success) {
         const transformedRoute = {
           success: true,
+          status: res.status || 'CLEAR',
           distanceKm: res.distanceKm,
           etaMinutes: res.etaMinutes,
           coordinates: res.polyline || [],
@@ -87,10 +98,13 @@ export function ResponseProvider({ children }) {
             name: inc.description || inc.type,
           })),
           reason: (res.avoidedIncidents || []).length > 0
-            ? 'Avoids reported blocked road'
+            ? 'Avoids reported hazard / blocked road'
             : 'Optimal street network path',
           safetyNote: res.safetyNote || 'Recommended alternative route based on available route and incident data.',
           source: res.source,
+          hasAlternate: !!res.hasAlternate,
+          primaryRoute: res.primaryRoute,
+          alternateRoute: res.alternateRoute,
         };
         setRoute(transformedRoute);
         return transformedRoute;
@@ -120,18 +134,32 @@ export function ResponseProvider({ children }) {
   }, [userLocation, destinationVolunteer, liveVolunteers]);
 
   // Request help & match with real volunteer responder
-  const requestResource = useCallback(async (name = resource, priority = 'HIGH') => {
-    if (!userLocation) {
+  const requestResource = useCallback(async (options = {}) => {
+    const opts = typeof options === 'string' ? { type: options } : (options || {});
+    const reqType = opts.type || resource;
+    const priority = opts.priority || 'HIGH';
+    const loc = opts.latitude != null && opts.longitude != null
+      ? { latitude: opts.latitude, longitude: opts.longitude }
+      : userLocation;
+
+    if (!loc) {
       return { matched: false, failed: true, message: 'Your location is required to request help. Turn on location and try again.' };
     }
 
     try {
       const result = await apiRequestHelp({
-        type: name,
+        type: reqType,
         priority,
-        latitude: userLocation.latitude,
-        longitude: userLocation.longitude,
+        latitude: loc.latitude,
+        longitude: loc.longitude,
         userId: user ? user.id : undefined,
+        destination_lat: opts.destination_lat,
+        destination_lng: opts.destination_lng,
+        phone: opts.phone,
+        notes: opts.notes,
+        description: opts.description,
+        photo_url: opts.photo_url,
+        is_manual_location: !!opts.is_manual_location,
       });
 
       if (result && result.match && result.match.matched && result.match.volunteer) {
@@ -145,8 +173,10 @@ export function ResponseProvider({ children }) {
         await requestRoute({ latitude: vol.latitude, longitude: vol.longitude });
         return cleaned;
       } else {
-        setMatch(result.match || { matched: false, message: 'No nearby matching responder found.' });
-        return result.match;
+        const noMatch = result.match || { matched: false, message: 'No nearby matching responder found.' };
+        const cleaned = { ...noMatch, requestId: result.requestId };
+        setMatch(cleaned);
+        return cleaned;
       }
     } catch (err) {
       const fallbackFail = { matched: false, failed: true, message: 'Could not reach the server to send your request. Check your connection and try again.' };

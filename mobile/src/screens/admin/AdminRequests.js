@@ -1,9 +1,9 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import Header from '../../components/Header';
-import { Card, ErrorText, Pill, statusColor } from '../../components/ui';
+import { Card, ErrorText, Pill, SmallButton, statusColor } from '../../components/ui';
 import usePolling from '../../hooks/usePolling';
-import { getHelpRequests, getMatches } from '../../services/accountApi';
+import { getHelpRequests, getMatches, deleteHelpRequest } from '../../services/accountApi';
 import { timeAgo } from '../../services/geo';
 import { prettyResource } from '../../integration/volunteerAdapter';
 import { colors, fonts } from '../../theme';
@@ -11,11 +11,28 @@ import { colors, fonts } from '../../theme';
 export default function AdminRequests() {
   const reqs = usePolling(getHelpRequests, 6000);
   const matches = usePolling(getMatches, 6000);
+  const [busyId, setBusyId] = useState(null);
+  const [deleteError, setDeleteError] = useState('');
+
+  const onDeleteReq = async (id) => {
+    setBusyId(id);
+    setDeleteError('');
+    try {
+      await deleteHelpRequest(id);
+      if (reqs.reload) await reqs.reload();
+      if (matches.reload) await matches.reload();
+    } catch (e) {
+      setDeleteError(e?.detail || e?.message || 'Failed to delete request.');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   return (
     <View style={{ flex: 1 }}>
       <Header title="Requests" subtitle="Help requests and volunteer matches" />
       <ScrollView contentContainerStyle={styles.body}>
-        <ErrorText>{reqs.error || matches.error}</ErrorText>
+        <ErrorText>{deleteError || reqs.error || matches.error}</ErrorText>
         <Text style={styles.section}>Help requests ({(reqs.data || []).length})</Text>
         {reqs.data && reqs.data.length === 0 && <Text style={styles.line}>No help requests.</Text>}
         {(reqs.data || []).map((r) => (
@@ -25,6 +42,14 @@ export default function AdminRequests() {
               <Pill text={r.status} color={statusColor(r.status)} />
             </View>
             <Text style={styles.line}>Priority {r.priority} · user #{r.user_id} · {timeAgo(r.created_at)}</Text>
+            <View style={{ marginTop: 10, alignSelf: 'flex-start' }}>
+              <SmallButton
+                label={busyId === r.id ? 'Deleting…' : 'Delete'}
+                outline
+                disabled={busyId === r.id}
+                onPress={() => onDeleteReq(r.id)}
+              />
+            </View>
           </Card>
         ))}
         <Text style={styles.section}>Matches ({(matches.data || []).length})</Text>

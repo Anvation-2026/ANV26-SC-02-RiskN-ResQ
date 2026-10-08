@@ -49,6 +49,17 @@ export default function VolunteerHome({ navigate }) {
           </Pressable>
         )}
 
+        {first && (first.match_status === 'ACCEPTED' || first.match_status === 'EN_ROUTE' || first.match_status === 'ARRIVED') && (
+          <View style={{ marginBottom: 12 }}>
+            <ActionButton
+              variant="primary"
+              label={`ACTIVE MISSION: ${first.match_status.replace('_', ' ')} · MAP & ROUTE`}
+              color={colors.route}
+              onPress={() => navigate('Map', { requestId: first.request_id })}
+            />
+          </View>
+        )}
+
         <Card>
           <Label>STATUS</Label>
           <View style={s.statusRow}>

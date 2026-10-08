@@ -27,6 +27,7 @@ export function DataProvider({ children }) {
   const [roadStatus, setRoadStatus] = useState([]); // admin-managed road state from GET /roads
   const [weatherMonitor, setWeatherMonitor] = useState(null); // rainfall grid from GET /weather/monitoring
   const [source, setSource] = useState('live');
+  const [activeAssistance, setActiveAssistance] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [backendError, setBackendError] = useState(null);
 
@@ -110,6 +111,7 @@ export function DataProvider({ children }) {
       setWeather(bundle.weather || null);
       setIncidents(bundle.incidents || []);
       setVolunteers(bundle.volunteers || []);
+      setActiveAssistance(bundle.active_assistance || null);
       setSource('live');
       setLastUpdated(Date.now());
       setBackendError(null);
@@ -234,6 +236,7 @@ export function DataProvider({ children }) {
     blocked,
     roads: roadStatus,
     alerts,
+    activeAssistance,
     source,
     lastUpdated,
     backendError,

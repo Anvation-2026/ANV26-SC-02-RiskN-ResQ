@@ -170,3 +170,112 @@ def test_sync_telemetry():
     assert "risk" in data
     assert "incidents" in data
     assert "volunteers" in data
+
+
+def test_help_request_lifecycle_and_tracking():
+    # 0. Register a volunteer for Flood Rescue
+    vol = client.post("/volunteers/register", json={
+        "name": "Rescue Alpha",
+        "skill": "FLOOD_RESCUE",
+        "resources": "Rescue Boat",
+        "latitude": 12.9750,
+        "longitude": 77.6010,
+    }).json()
+    assert "id" in vol
+
+    # 1. Create a help request for Flood Rescue
+    req_res = client.post("/help-requests", json={
+        "type": "FLOOD_RESCUE",
+        "priority": "CRITICAL",
+        "latitude": 12.9716,
+        "longitude": 77.5946,
+        "phone": "+91 91111 22222",
+        "description": "Family stranded on first floor",
+    })
+    assert req_res.status_code == 201
+    req_id = req_res.json()["requestId"]
+
+    # 2. Accept the request
+    accept_res = client.post(f"/help-requests/{req_id}/accept")
+    assert accept_res.status_code == 200
+    assert accept_res.json()["status"] == "ACCEPTED"
+    assert accept_res.json()["request"]["status"] == "ACCEPTED"
+
+    # 3. Transition to EN_ROUTE
+    en_route_res = client.post(f"/help-requests/{req_id}/en-route")
+    assert en_route_res.status_code == 200
+    assert en_route_res.json()["status"] == "EN_ROUTE"
+
+    # 4. Transition to ARRIVED
+    arrived_res = client.post(f"/help-requests/{req_id}/arrived")
+    assert arrived_res.status_code == 200
+    assert arrived_res.json()["status"] == "ARRIVED"
+
+    # 5. Check live tracking packet
+    tracking_res = client.get(f"/help-requests/{req_id}/tracking")
+    assert tracking_res.status_code == 200
+    track_data = tracking_res.json()
+    assert track_data["request_id"] == req_id
+    assert track_data["status"] == "ARRIVED"
+    assert track_data["requester"]["latitude"] == 12.9716
+    assert track_data["volunteer"]["name"] == "Rescue Alpha"
+    assert "polyline" in track_data
+
+    # 6. Complete the request
+    complete_res = client.post(f"/help-requests/{req_id}/complete")
+    assert complete_res.status_code == 200
+    assert complete_res.json()["status"] == "COMPLETED"
+
+
+def test_help_request_cancellation_and_deletion():
+    # 1. Create request
+    req = client.post("/help-requests", json={
+        "type": "EVACUATION",
+        "priority": "HIGH",
+        "latitude": 12.9716,
+        "longitude": 77.5946,
+    }).json()
+    req_id = req["requestId"]
+
+    # 2. Cancel request
+    cancel_res = client.post(f"/help-requests/{req_id}/cancel", json={"reason": "Water receded, safe now"})
+    assert cancel_res.status_code == 200
+    assert cancel_res.json()["status"] == "CANCELLED"
+    assert cancel_res.json()["cancellation_reason"] == "Water receded, safe now"
+
+    # 3. Delete request
+    del_res = client.delete(f"/help-requests/{req_id}")
+    assert del_res.status_code == 200
+    assert del_res.json()["success"] is True
+
+
+def test_incident_deletion():
+    # 1. Create incident
+    inc = client.post("/incidents", json={
+        "type": "FLOOD",
+        "description": "Temporary puddle",
+        "severity": 2,
+        "latitude": 12.9716,
+        "longitude": 77.5946,
+    }).json()
+    inc_id = inc["id"]
+
+    # 2. Delete incident
+    del_res = client.delete(f"/incidents/{inc_id}")
+    assert del_res.status_code == 200
+    assert del_res.json()["success"] is True
+    assert client.get(f"/incidents/{inc_id}").status_code == 404
+
+
+def test_smart_routing_with_alternate_and_safety_note():
+    route_res = client.post("/routes/compute", json={
+        "origin": {"latitude": 12.9716, "longitude": 77.5946},
+        "destination": {"latitude": 12.9800, "longitude": 77.6100},
+        "travelMode": "DRIVE",
+    })
+    assert route_res.status_code == 200
+    data = route_res.json()
+    assert data["success"] is True
+    assert "safetyNote" in data
+    assert "primaryRoute" in data
+    assert "status" in data

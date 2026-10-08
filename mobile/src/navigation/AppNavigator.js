@@ -10,6 +10,7 @@ import ReportScreen from '../screens/ReportScreen';
 import HelpScreen from '../screens/HelpScreen';
 import AlertsScreen from '../screens/AlertsScreen';
 import AccountScreen from '../screens/AccountScreen';
+import LiveAssistanceScreen from '../screens/LiveAssistanceScreen';
 
 const TABS = [
   { key: 'Home', label: 'Home', icon: 'home', Screen: HomeScreen },
@@ -21,23 +22,39 @@ const TABS = [
 ];
 
 export default function AppNavigator() {
-  const [active, setActive] = useState('Home');
+  const [active, setActiveRaw] = useState('Home');
+  const [params, setParams] = useState({});
   const insets = useSafeAreaInsets();
   const { alerts } = useData();
 
+  const navigate = (k, p) => {
+    if (p) setParams((cur) => ({ ...cur, [k]: p }));
+    setActiveRaw(k);
+  };
+
+  const isTracking = active === 'Tracking' || active === 'LiveAssistance';
   const bottomPadding = Math.max(insets.bottom, 10);
 
   return (
     <View style={styles.root}>
       <View style={styles.screenContainer}>
         {TABS.map(({ key, Screen }) => (
-          <View key={key} style={[StyleSheet.absoluteFill, active !== key && styles.hiddenScreen]}>
-            <Screen navigate={setActive} />
+          <View key={key} style={[StyleSheet.absoluteFill, (active !== key || isTracking) && styles.hiddenScreen]}>
+            <Screen navigate={navigate} params={params[key]} />
           </View>
         ))}
+        {isTracking && (
+          <View style={StyleSheet.absoluteFill}>
+            <LiveAssistanceScreen
+              navigate={navigate}
+              params={params['Tracking'] || params['LiveAssistance']}
+              onBack={() => navigate('Home')}
+            />
+          </View>
+        )}
       </View>
 
-      <View style={[styles.bar, { paddingBottom: bottomPadding }]}>
+      <View style={[styles.bar, { paddingBottom: bottomPadding }, isTracking && styles.hiddenScreen]}>
         {TABS.map((t) => {
           const isActive = active === t.key;
           const activeColor = colors.primary;

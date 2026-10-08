@@ -12,6 +12,7 @@ import ConnectionBanner from '../components/ConnectionBanner';
 import { useData } from '../context/DataContext';
 import { colors, radius, riskColor, shadow } from '../theme';
 import { timeAgo } from '../services/geo';
+import { prettyResource } from '../integration/volunteerAdapter';
 
 const TEXT = {
   LOW: ['LOW FLOOD RISK', 'Drainage and street runoff within normal limits. No severe hazard reported.'],
@@ -39,6 +40,7 @@ export default function HomeScreen({ navigate }) {
     incidents,
     alerts,
     blocked,
+    activeAssistance,
     source,
     lastUpdated,
     requestPermission,
@@ -101,6 +103,59 @@ export default function HomeScreen({ navigate }) {
             </Pressable>
             <Pressable style={styles.manualBtn} onPress={() => applyManualLocation(12.9716, 77.5946, 'Bengaluru (manual location)')}>
               <Text style={styles.manualBtnText}>Use Bengaluru instead (manual location)</Text>
+            </Pressable>
+          </View>
+        )}
+
+        {/* 1a. ACTIVE ASSISTANCE BANNER (WHEN USER HAS ACTIVE DISPATCH) */}
+        {activeAssistance && activeAssistance.status !== 'COMPLETED' && activeAssistance.status !== 'CANCELLED' && (
+          <View style={styles.assistanceCard}>
+            <View style={styles.assistanceHeaderRow}>
+              <View style={styles.assistanceIconWrap}>
+                <Feather name="life-buoy" size={16} color="#FFFFFF" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.assistanceKicker}>EMERGENCY ASSISTANCE IN PROGRESS</Text>
+                <Text style={styles.assistanceTitle}>
+                  {prettyResource(activeAssistance.type || 'Assistance')} · #{activeAssistance.request_id}
+                </Text>
+              </View>
+              <View style={[styles.assistanceStatusPill, {
+                backgroundColor: activeAssistance.status === 'EN_ROUTE' ? '#0284C7' : activeAssistance.status === 'ARRIVED' ? '#16A34A' : '#D97706'
+              }]}>
+                <Text style={styles.assistanceStatusText}>{activeAssistance.status}</Text>
+              </View>
+            </View>
+
+            <Text style={styles.assistanceBody}>
+              {activeAssistance.volunteer
+                ? `Responder ${activeAssistance.volunteer.name} is dispatched to your location.`
+                : 'Request logged with coordinates. Coordinating verified local responders.'}
+            </Text>
+
+            {(activeAssistance.eta_minutes != null || activeAssistance.distance_km != null) && (
+              <View style={styles.assistanceMetricsRow}>
+                {activeAssistance.eta_minutes != null && (
+                  <View style={styles.assistanceMetric}>
+                    <Feather name="clock" size={13} color="#0284C7" style={{ marginRight: 4 }} />
+                    <Text style={styles.assistanceMetricText}>ETA ~{activeAssistance.eta_minutes} min</Text>
+                  </View>
+                )}
+                {activeAssistance.distance_km != null && (
+                  <View style={styles.assistanceMetric}>
+                    <Feather name="navigation" size={13} color="#059669" style={{ marginRight: 4 }} />
+                    <Text style={styles.assistanceMetricText}>{activeAssistance.distance_km} km away</Text>
+                  </View>
+                )}
+              </View>
+            )}
+
+            <Pressable
+              style={styles.assistanceTrackBtn}
+              onPress={() => navigate('Tracking', { requestId: activeAssistance.request_id })}
+            >
+              <Feather name="map" size={14} color="#FFFFFF" style={{ marginRight: 6 }} />
+              <Text style={styles.assistanceTrackBtnText}>TRACK RESPONDER ON LIVE MAP</Text>
             </Pressable>
           </View>
         )}
@@ -437,5 +492,86 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: colors.border,
     marginVertical: 10,
+  },
+  assistanceCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: radius.card,
+    padding: 14,
+    marginBottom: 12,
+    borderWidth: 1.5,
+    borderColor: '#0284C7',
+    ...shadow,
+  },
+  assistanceHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 8,
+  },
+  assistanceIconWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#0284C7',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  assistanceKicker: {
+    fontSize: 9.5,
+    fontFamily: 'PlusJakartaSans_800ExtraBold',
+    color: '#0284C7',
+    letterSpacing: 0.8,
+  },
+  assistanceTitle: {
+    fontSize: 15,
+    fontFamily: 'PlusJakartaSans_800ExtraBold',
+    color: colors.text,
+  },
+  assistanceStatusPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  assistanceStatusText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontFamily: 'PlusJakartaSans_800ExtraBold',
+    letterSpacing: 0.5,
+  },
+  assistanceBody: {
+    fontSize: 13,
+    fontFamily: 'PlusJakartaSans_500Medium',
+    color: '#475569',
+    lineHeight: 18,
+    marginBottom: 10,
+  },
+  assistanceMetricsRow: {
+    flexDirection: 'row',
+    gap: 16,
+    marginBottom: 12,
+  },
+  assistanceMetric: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  assistanceMetricText: {
+    fontSize: 12,
+    fontFamily: 'PlusJakartaSans_700Bold',
+    color: colors.text,
+  },
+  assistanceTrackBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.route,
+    borderRadius: radius.button,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+  },
+  assistanceTrackBtnText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontFamily: 'PlusJakartaSans_800ExtraBold',
+    letterSpacing: 0.5,
   },
 });
