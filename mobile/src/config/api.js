@@ -26,3 +26,4 @@ export const POLL_MS = 4000;           // how often risk / alerts / roads refres
 export const REQUEST_TIMEOUT_MS = 2500;
 export const FLOOD_RAINFALL_MM = 80;   // rainfall used by the "Flood Risk" demo control
 export const NORMAL_RAINFALL_MM = 5;
+export const USE_DEVICE_LOCATION = false; // true = real GPS via expo-location; false = deterministic demo location (Bengaluru)

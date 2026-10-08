@@ -3,6 +3,7 @@ import { View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold, PlusJakartaSans_800ExtraBold } from '@expo-google-fonts/plus-jakarta-sans';
 import { DataProvider } from './src/context/DataContext';
+import { ResponseProvider } from './src/context/ResponseContext';
 import AppNavigator from './src/navigation/AppNavigator';
 
 export default function App() {
@@ -11,10 +12,12 @@ export default function App() {
   if (!loaded && !error) return <View style={{ flex: 1, backgroundColor: '#0B1F3A' }} />;
   return (
     <DataProvider>
-      <View style={{ flex: 1 }}>
-        <StatusBar style="light" />
-        <AppNavigator />
-      </View>
+      <ResponseProvider>
+        <View style={{ flex: 1 }}>
+          <StatusBar style="light" />
+          <AppNavigator />
+        </View>
+      </ResponseProvider>
     </DataProvider>
   );
 }

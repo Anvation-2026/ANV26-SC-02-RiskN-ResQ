@@ -12,6 +12,7 @@ export const colors = {
   route: '#1A73E8',
   LOW: '#16A34A',
   MEDIUM: '#F59E0B',
+  MODERATE: '#F59E0B',
   HIGH: '#DC2626',
   CRITICAL: '#7F1D1D',
 };

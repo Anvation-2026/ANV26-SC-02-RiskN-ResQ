@@ -68,6 +68,23 @@ The app finds the backend automatically at `http://<your-computer-IP>:8000`. To 
 
 The demo panel is a development control. Set `DEMO_CONTROLS = false` in `mobile/src/config/api.js` to hide it.
 
+## Route & Resources (geospatial module)
+
+Added by Vishvanth, in `mobile/src/features/disaster-response/` (docs in `mobile/docs/`). On the **Map** tab, switch to **Route & Resources** to:
+
+1. See the user location, flood-risk zones and the geofence result (inside or outside, risk level).
+2. **Block** or **Unblock** a road (5th Cross) and **Reset Demo**.
+3. **Request a route**: Dijkstra routing excludes blocked roads and returns the distance, ETA and the reason for the detour.
+4. **Request a resource** (Medicine, Food, Water, First Aid, Evacuation): the explainable 100-point matcher returns the best available volunteer, or "No suitable nearby resource found."
+
+Blocking the demo road also blocks Road A on the backend (best effort), and the Help screen uses the same matching engine through `src/integration/volunteerAdapter.ts`.
+
+```bash
+cd mobile
+npx tsc --noEmit        # type check
+npx jest --runInBand    # 16 tests
+```
+
 ## How the logic works
 
 - **Risk score:** rainfall below 20 mm is LOW, 20–60 MEDIUM, 60–100 HIGH, above 100 CRITICAL. Verified (or credible) flood and blocked-road reports in the zone add up to 25 points. Score thresholds: 25 / 50 / 75.
@@ -109,6 +126,8 @@ mobile/
     screens/       Home, Map, Report, Help, Alerts
     components/    RiskCard, AlertCard, MapView, MatchCard, DemoPanel, ...
     services/      api.js (live + fallback), mockData.js, geo.js
+    features/disaster-response/   geofencing, routing, matching (TypeScript module)
+    integration/   adapter between backend data and the module
     context/       DataContext.js (polling)
     navigation/    AppNavigator.js (bottom tabs)
     config/        api.js (API URL, demo switches)

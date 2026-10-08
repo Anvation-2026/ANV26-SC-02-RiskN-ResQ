@@ -40,7 +40,7 @@ export default function HelpScreen() {
             ) : (
               <View style={styles.none}>
                 <Text style={styles.noneTitle}>Request received{result.requestId ? ` · #${result.requestId}` : ''}</Text>
-                <Text style={styles.noneBody}>No volunteer is available right now. Your request stays open and will be matched as soon as someone is free.</Text>
+                <Text style={styles.noneBody}>No suitable nearby resource found. Your request stays open and will be matched as soon as one becomes available.</Text>
               </View>
             )}
             <View style={{ marginTop: 16 }}><ActionButton variant="primary" label="NEW REQUEST" color={colors.navy} onPress={() => setResult(null)} /></View>

@@ -1,7 +1,8 @@
 // API service layer. Every call tries the live backend first and silently falls
 // back to centralised mock data (mockData.js) when it is unreachable.
 import { API_BASE_URL, FORCE_MOCK, REQUEST_TIMEOUT_MS, FLOOD_RAINFALL_MM, NORMAL_RAINFALL_MM } from '../config/api';
-import { USER, matchVolunteer, routeInfo } from './geo';
+import { USER, routeInfo } from './geo';
+import { matchBackendVolunteers } from '../integration/volunteerAdapter';
 import * as mock from './mockData';
 
 let source = 'demo'; // 'live' | 'demo' — what the last call actually used
@@ -72,7 +73,13 @@ export async function requestHelp({ type, priority }) {
   const request = await withFallback(() => http('/help-request', { method: 'POST', body }), () => mock.mockHelp(body));
   const live = source === 'live';
   const volunteers = live ? await http('/volunteers').catch(() => mock.mockVolunteers()) : mock.mockVolunteers();
-  const match = matchVolunteer(volunteers, body);
+  const result = matchBackendVolunteers(volunteers, body); // module matching engine
+  const match = result.matched
+    ? {
+        volunteerId: Number(result.volunteer.id), volunteer: result.volunteer.name, resource: result.resource,
+        distanceKm: result.distanceKm, status: 'Available', score: result.matchScore, breakdown: result.scoreBreakdown,
+      }
+    : null;
   if (live && match) {
     http('/matches', { method: 'POST', body: { help_request_id: request.request_id, volunteer_id: match.volunteerId } }).catch(() => {});
   }
@@ -98,4 +105,12 @@ export async function setDemoScenario(scenario) {
     source = 'demo';
   }
   mock.mockSetScenario(scenario, rainfall); // keep demo data in step either way
+}
+
+// Keep the backend's first road ("Road A") in step with the module's ROAD_A demo control. Best effort.
+export async function syncRoadA(blocked) {
+  try {
+    const roads = await http('/roads');
+    if (roads.length) await http(`/roads/${roads[0].id}/${blocked ? 'block' : 'unblock'}`, { method: 'POST' });
+  } catch (e) { /* backend optional */ }
 }

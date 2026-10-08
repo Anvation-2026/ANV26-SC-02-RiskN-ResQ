@@ -1,6 +1,7 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { colors, radius } from '../theme';
+import { formatDistance } from '../features/disaster-response/utils/distance';
 
 const Cell = ({ label, value }) => (
   <View style={styles.cell}>
@@ -17,13 +18,18 @@ export default function MatchCard({ match, requestId }) {
       <View style={styles.grid}>
         <Cell label="Volunteer" value={match.volunteer} />
         <Cell label="Resource" value={match.resource} />
-        <Cell label="Distance" value={`${match.distanceKm} km`} />
+        <Cell label="Distance" value={formatDistance(match.distanceKm)} />
         <Cell label="Status" value={`● ${match.status}`} />
       </View>
       <View style={styles.scoreBox}>
         <Text style={styles.cl}>Match Score</Text>
         <Text style={styles.score}>{match.score}%</Text>
         <View style={styles.track}><View style={[styles.fill, { width: `${match.score}%` }]} /></View>
+        {match.breakdown ? (
+          <Text style={styles.why}>
+            Resource {match.breakdown.resourceCompatibility} · Availability {match.breakdown.availabilityScore} · Distance {match.breakdown.distanceScore} · Priority {match.breakdown.priorityScore}
+          </Text>
+        ) : null}
       </View>
     </View>
   );
@@ -39,6 +45,7 @@ const styles = StyleSheet.create({
   cv: { fontSize: 17, fontFamily: 'PlusJakartaSans_800ExtraBold', color: colors.text, marginTop: 2 },
   scoreBox: { backgroundColor: '#fff', borderRadius: 14, padding: 14, marginTop: 10 },
   score: { fontSize: 38, fontFamily: 'PlusJakartaSans_800ExtraBold', color: colors.LOW },
+  why: { fontFamily: 'PlusJakartaSans_400Regular', fontSize: 12, color: colors.muted, marginTop: 8, lineHeight: 18 },
   track: { height: 8, backgroundColor: '#D1FAE5', borderRadius: 4, overflow: 'hidden', marginTop: 4 },
   fill: { height: 8, backgroundColor: colors.LOW },
 });
