@@ -1,0 +1,9 @@
+node_modules/
+.expo/
+dist/
+web-build/
+__pycache__/
+*.pyc
+*.db
+.venv/
+.DS_Store

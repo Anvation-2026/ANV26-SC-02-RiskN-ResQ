@@ -1,1 +1,119 @@
-# RiskN-ResQ
+# RiskN ResQ
+
+**Hyper-local flood early warning and community action network.**
+RiskN ResQ tells people in a neighbourhood how likely a flood is right now, warns them when risk rises, shows which roads are blocked, suggests an alternative route, and connects people who need help with nearby volunteers.
+
+Built for a 2-hour hackathon. The MVP hazard is **flood**.
+
+## What it does
+
+| # | Feature | Where |
+|---|---|---|
+| 1 | Live **flood risk** per zone (0–100, LOW / MEDIUM / HIGH / CRITICAL) | Home |
+| 2 | Automatic **emergency alerts** when risk reaches HIGH or CRITICAL | Alerts |
+| 3 | **Blocked roads** and a **recommended alternative route** on a live map | Map |
+| 4 | **Report** a flood, blocked road or emergency (with a trust score) | Report |
+| 5 | **Request help** (medicine, food, water, first aid, evacuation) and get a **volunteer match** | Help |
+| 6 | **Hazard simulation** for demos: rainfall in, risk and alerts out | Demo panel / API |
+
+The app never claims a route is "safe". It says *"Recommended alternative route based on available incident data."*
+
+## Architecture
+
+```
+┌──────────────────────┐   REST / JSON    ┌───────────────────────────┐
+│  mobile/ (Expo, RN)  │ ───────────────▶ │  backend/ (FastAPI)       │
+│  Home Map Report     │ ◀─────────────── │  Risk · Trust · Alerts    │
+│  Help Alerts         │   polls every 4s │  Roads · Simulation       │
+│  + mock-data fallback│                  │  SQLite (auto-seeded)     │
+└──────────────────────┘                  └───────────────────────────┘
+```
+
+- **Backend:** Python, FastAPI, SQLite, Pydantic. Deterministic rules, no ML, no auth.
+- **Frontend:** React Native with Expo (JavaScript). If the backend is unreachable the app falls back to built-in demo data and shows *"Unable to connect to live data."*
+- **Map:** drawn from real road coordinates without a map SDK, so nothing extra to set up.
+
+## Quick start
+
+### 1. Backend
+
+```bash
+cd backend
+pip install -r requirements.txt
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+API docs: <http://localhost:8000/docs>. The database (`resilienturban.db`) is created and seeded on first start. Call `POST /reset` to restore the seed data.
+
+### 2. Mobile app
+
+```bash
+cd mobile
+npm install
+npx expo start
+```
+
+Scan the QR code with **Expo Go** (phone and computer on the same Wi-Fi), press `i` for the iOS simulator, or press `w` for the browser.
+
+The app finds the backend automatically at `http://<your-computer-IP>:8000`. To point it elsewhere, set `API_URL_OVERRIDE` in [`mobile/src/config/api.js`](mobile/src/config/api.js).
+
+## Demo script
+
+1. Open the app. Risk is **LOW**.
+2. On Home, press **Flood Risk** in the *DEMO MODE* panel (or call `POST /simulate-hazard`).
+3. Risk becomes **HIGH**, an alert appears, and Road A is marked **BLOCKED**.
+4. Open **Map**: the blocked road and the recommended alternative route are shown.
+5. Open **Help**, choose *Medicine*, press **Request Help**: a volunteer match appears.
+6. Press **Normal** to reset.
+
+The demo panel is a development control. Set `DEMO_CONTROLS = false` in `mobile/src/config/api.js` to hide it.
+
+## How the logic works
+
+- **Risk score:** rainfall below 20 mm is LOW, 20–60 MEDIUM, 60–100 HIGH, above 100 CRITICAL. Verified (or credible) flood and blocked-road reports in the zone add up to 25 points. Score thresholds: 25 / 50 / 75.
+- **Trust score:** starts at 50, +15 if a similar report (same type, within 500 m and 3 h) exists, +25 when an admin verifies it, −5 per hour after 6 h, 0 if rejected.
+- **Alerts:** created or upgraded when a zone is HIGH or CRITICAL, and deactivated when it drops back.
+- **Routing:** blocked roads come from `GET /roads`. The recommended alternative is the shortest road that is still available.
+- **Volunteer matching:** skill match counts most, distance breaks ties; the app picks the best available volunteer and saves it with `POST /matches`.
+
+## API
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/health` | `{"status":"ok"}` |
+| POST | `/reset` | Reset to seed data |
+| GET | `/risk` | `{overall, zones[]}`; `?zone=Zone A` for one zone |
+| POST | `/simulate-hazard` | `{"hazard":"FLOOD","rainfall":120,"zone":"Zone A"?}` returns `before`, `after`, `active_alerts` |
+| GET / POST | `/alerts` | `?active_only=true` |
+| GET / POST | `/incidents` | types `FLOOD`, `BLOCKED_ROAD`, `EMERGENCY`; filters `?status=` `?type=` |
+| GET | `/incidents/{id}` | |
+| POST | `/incidents/{id}/verify`, `/reject`, `/resolve` | admin actions |
+| GET | `/roads`, `/roads/{id}` | `?status=BLOCKED` |
+| POST | `/roads/{id}/block`, `/unblock` | |
+| POST | `/help-request` | returns `request_id` |
+| GET | `/help-requests`, `/volunteers`, `/matches` | |
+| POST | `/matches` | `{"help_request_id":1,"volunteer_id":2}` |
+
+Zones are `Zone A`, `Zone B`, `Zone C`; incidents are assigned to the nearest one. CORS is open to all origins.
+
+## Project structure
+
+```
+backend/
+  main.py          FastAPI routes
+  engine.py        risk, trust score, alert logic
+  db.py            SQLite schema and seed data
+mobile/
+  App.js
+  src/
+    screens/       Home, Map, Report, Help, Alerts
+    components/    RiskCard, AlertCard, MapView, MatchCard, DemoPanel, ...
+    services/      api.js (live + fallback), mockData.js, geo.js
+    context/       DataContext.js (polling)
+    navigation/    AppNavigator.js (bottom tabs)
+    config/        api.js (API URL, demo switches)
+```
+
+## Out of scope for the MVP
+
+Login, user profiles, chat, payments, other disaster types, machine learning, an admin dashboard, and real photo upload (the photo button is visual only).
