@@ -328,8 +328,18 @@ CREATE TABLE IF NOT EXISTS help_requests (
     priority TEXT NOT NULL DEFAULT 'MEDIUM',
     latitude REAL,
     longitude REAL,
+    destination_lat REAL,
+    destination_lng REAL,
+    phone TEXT,
+    notes TEXT,
+    description TEXT,
+    photo_url TEXT,
+    assigned_volunteer_id INTEGER,
+    cancellation_reason TEXT,
+    is_manual_location INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'OPEN',
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS volunteers (
@@ -358,6 +368,7 @@ CREATE TABLE IF NOT EXISTS matches (
     eta_minutes INTEGER DEFAULT 0,
     match_score INTEGER DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'PROPOSED',
+    notes TEXT,
     created_at TEXT NOT NULL
 );
 
@@ -385,6 +396,13 @@ CREATE TABLE IF NOT EXISTS risk_snapshots (
     observed_at TEXT NOT NULL,
     computed_at TEXT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS ix_help_requests_status ON help_requests(status);
+CREATE INDEX IF NOT EXISTS ix_help_requests_user_id ON help_requests(user_id);
+CREATE INDEX IF NOT EXISTS ix_incidents_status ON incidents(status);
+CREATE INDEX IF NOT EXISTS ix_volunteers_available ON volunteers(available);
+CREATE INDEX IF NOT EXISTS ix_matches_help_request_id ON matches(help_request_id);
+CREATE INDEX IF NOT EXISTS ix_matches_volunteer_id ON matches(volunteer_id);
 """
 
 # Indexes for the columns the API filters and joins on. Created after the column migrations (some columns are added there), and at
@@ -434,9 +452,6 @@ MIGRATIONS = {
         ("confirmations", "INTEGER NOT NULL DEFAULT 0"),
         ("duplicate_of", "INTEGER"),
     ],
-    "help_requests": [
-        ("quantity", "INTEGER NOT NULL DEFAULT 1"),
-    ],
     "alerts": [
         ("sources", "TEXT"),
         ("action", "TEXT"),
@@ -470,6 +485,22 @@ MIGRATIONS = {
         ("source", "TEXT NOT NULL DEFAULT 'SEED'"),
         ("elevation", "REAL"),
         ("low_lying", "INTEGER NOT NULL DEFAULT 0"),
+    ],
+    "help_requests": [
+        ("quantity", "INTEGER NOT NULL DEFAULT 1"),
+        ("destination_lat", "REAL"),
+        ("destination_lng", "REAL"),
+        ("phone", "TEXT"),
+        ("notes", "TEXT"),
+        ("description", "TEXT"),
+        ("photo_url", "TEXT"),
+        ("assigned_volunteer_id", "INTEGER"),
+        ("cancellation_reason", "TEXT"),
+        ("is_manual_location", "INTEGER NOT NULL DEFAULT 0"),
+        ("updated_at", "TEXT"),
+    ],
+    "matches": [
+        ("notes", "TEXT"),
     ],
 }
 

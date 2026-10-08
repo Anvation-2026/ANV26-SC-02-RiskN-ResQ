@@ -1,20 +1,28 @@
 import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { Card, ErrorText, Pill, statusColor, Timeline } from './ui';
+import { Card, ErrorText, Pill, SmallButton, statusColor, Timeline } from './ui';
 import { PriorityBadge } from './RequestCards';
 import { AnimatedNumber } from './motion';
 import usePolling from '../hooks/usePolling';
-import { getHelpRequests, getMatches, trackRequest } from '../services/accountApi';
+import { getHelpRequests, getMatches, trackRequest, cancelHelpRequest } from '../services/accountApi';
 import { useT } from '../i18n';
 import { prettyResource } from '../integration/volunteerAdapter';
 import { timeAgo } from '../services/geo';
 import { colors, fonts } from '../theme';
 
-const STATUS_TEXT = { OPEN: 'WAITING FOR A VOLUNTEER', MATCHED: 'VOLUNTEER ASSIGNED', COMPLETED: 'COMPLETED' };
+const STATUS_TEXT = {
+  OPEN: 'WAITING FOR A VOLUNTEER',
+  MATCHED: 'VOLUNTEER ASSIGNED',
+  ACCEPTED: 'VOLUNTEER ACCEPTED',
+  EN_ROUTE: 'VOLUNTEER EN ROUTE',
+  ARRIVED: 'VOLUNTEER ARRIVED',
+  COMPLETED: 'COMPLETED',
+  CANCELLED: 'CANCELLED',
+};
 
 // The signed-in user's own help requests, read from the database (the server only returns the caller's own).
-const STEPS = ['REQUESTED', 'MATCHED', 'ACCEPTED', 'COMPLETED'];
-const EVENT_TEXT = { REQUESTED: 'Request sent', MATCHED: 'Volunteer found', ACCEPTED: 'Volunteer accepted', COMPLETED: 'Completed', PROPOSED: 'Volunteer proposed' };
+const STEPS = ['REQUESTED', 'MATCHED', 'ACCEPTED', 'EN_ROUTE', 'ARRIVED', 'COMPLETED'];
+const EVENT_TEXT = { REQUESTED: 'Request sent', MATCHED: 'Volunteer found', ACCEPTED: 'Volunteer accepted', EN_ROUTE: 'Volunteer on the way', ARRIVED: 'Volunteer arrived', COMPLETED: 'Completed', PROPOSED: 'Volunteer proposed' };
 
 // Live progress of one request: timeline, the volunteer's distance and ETA. Mounted only while the card is open.
 function Tracking({ id }) {
@@ -44,13 +52,28 @@ function Tracking({ id }) {
   );
 }
 
-export default function MyHelpRequests() {
+export default function MyHelpRequests({ navigate }) {
   const t = useT();
   const [open, setOpen] = useState(null);
   const reqs = usePolling(getHelpRequests, 8000);
   const matches = usePolling(getMatches, 8000);
+  const [cancellingId, setCancellingId] = useState(null);
+
   const list = Array.isArray(reqs.data) ? reqs.data.slice(0, 8) : [];
   const matchFor = (id) => (Array.isArray(matches.data) ? matches.data.find((m) => m.help_request_id === id && m.status !== 'CANCELLED') : null);
+
+  const onCancel = async (id) => {
+    setCancellingId(id);
+    try {
+      await cancelHelpRequest(id, 'User cancelled from requests list');
+      if (reqs.reload) await reqs.reload();
+      if (matches.reload) await matches.reload();
+    } catch (e) {
+      /* ignore */
+    } finally {
+      setCancellingId(null);
+    }
+  };
 
   return (
     <View style={{ marginTop: 22 }}>
@@ -60,15 +83,30 @@ export default function MyHelpRequests() {
         <Card><Text style={s.hint}>You have not made any help requests yet.</Text></Card>
       ) : list.map((r) => {
         const m = matchFor(r.id);
-        const status = m && m.status === 'ACCEPTED' ? 'VOLUNTEER ACCEPTED' : STATUS_TEXT[r.status] || r.status;
+        const status = r.status === 'MATCHED' && m?.status ? (STATUS_TEXT[m.status] || m.status) : (STATUS_TEXT[r.status] || r.status);
+        const isActive = r.status !== 'COMPLETED' && r.status !== 'CANCELLED';
+
         return (
           <Pressable key={r.id} onPress={() => setOpen(open === r.id ? null : r.id)} accessibilityRole="button" accessibilityLabel={`${prettyResource(r.type)} request ${r.id}`} accessibilityState={{ expanded: open === r.id }}>
           <Card>
             <View style={s.top}><Text style={s.type}>{prettyResource(r.type)} · #{r.id}</Text><PriorityBadge priority={r.priority} /></View>
-            <View style={{ marginTop: 8, alignSelf: 'flex-start' }}><Pill text={status} color={statusColor(r.status === 'COMPLETED' ? 'COMPLETED' : r.status === 'MATCHED' ? 'MATCHED' : 'OPEN')} /></View>
+            <View style={{ marginTop: 8, alignSelf: 'flex-start' }}><Pill text={status} color={statusColor(r.status === 'COMPLETED' ? 'COMPLETED' : isActive ? 'MATCHED' : 'OPEN')} /></View>
             {m && m.volunteer_name ? <Text style={s.hint}>Volunteer: {m.volunteer_name}</Text> : null}
             <Text style={s.hint}>Requested {timeAgo(r.created_at)}</Text>
             {open === r.id ? <Tracking id={r.id} /> : <Text style={s.more}>Tap for progress</Text>}
+            {isActive && (
+              <View style={s.actions}>
+                {navigate && (
+                  <SmallButton label="Track Live" color={colors.route} onPress={() => navigate('Tracking', { requestId: r.id })} />
+                )}
+                <SmallButton
+                  label={cancellingId === r.id ? 'Cancelling…' : 'Cancel'}
+                  outline
+                  disabled={cancellingId === r.id}
+                  onPress={() => onCancel(r.id)}
+                />
+              </View>
+            )}
           </Card>
           </Pressable>
         );
@@ -91,4 +129,5 @@ const s = StyleSheet.create({
   eventTime: { fontFamily: fonts.regular, fontSize: 12, color: colors.muted },
   more: { fontFamily: fonts.semibold, fontSize: 12, color: colors.primary, marginTop: 8 },
   hint: { fontFamily: fonts.regular, fontSize: 13, color: colors.muted, marginTop: 6, lineHeight: 19 },
+  actions: { flexDirection: 'row', gap: 8, marginTop: 12 },
 });

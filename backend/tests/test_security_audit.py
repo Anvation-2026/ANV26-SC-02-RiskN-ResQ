@@ -68,6 +68,9 @@ def test_the_public_list_is_not_stale(client):
 
 ADMIN_ONLY = [(m, p) for m, p in routes() if "/admin/" in p or p in ("/reset", "/simulate-hazard", "/alerts", "/volunteers", "/volunteers/register")
               or p.endswith(("/block", "/unblock", "/verify", "/reject", "/resolve")) or p in ("/incidents/{incident_id}", "/volunteers/{volunteer_id}")]
+# the help-request lifecycle routes are for the assigned volunteer (or an admin); they are checked in test_help_lifecycle_routes_refuse_normal_users
+LIFECYCLE = ("accept", "en-route", "arrived", "reject")
+ADMIN_ONLY = [(m, p) for m, p in ADMIN_ONLY if not (p.startswith("/help-requests/") and p.rsplit("/", 1)[-1] in LIFECYCLE)]
 
 
 def test_admin_routes_refuse_normal_users_and_volunteers(client):
@@ -149,3 +152,13 @@ def test_cors_is_open_for_development_and_closed_by_default_when_deployed(monkey
     monkeypatch.delenv("CORS_ORIGINS")
     importlib.reload(config)
     assert config.CORS_ORIGINS == ["*"]                    # local development
+
+
+def test_help_lifecycle_routes_refuse_normal_users_and_unassigned_volunteers(client):
+    u = user_client()
+    for step in LIFECYCLE:
+        assert u.post(f"/help-requests/1/{step}").status_code == 403, step
+    v, _ = volunteer_client(client)
+    for step in ("reject", "en-route", "arrived"):
+        r = v.post(f"/help-requests/999999/{step}")
+        assert r.status_code == 404, (step, r.status_code)

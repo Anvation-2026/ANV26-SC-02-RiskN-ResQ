@@ -189,24 +189,69 @@ export async function updateVolunteerLocation(volunteerId, latitude, longitude) 
 let lastMatch = null;
 export const getMatch = () => lastMatch;
 
-export async function requestHelp({ type, priority = 'HIGH', latitude, longitude, userId, quantity = 1, idempotencyKey }) {
+export async function requestHelp({
+  type,
+  priority = 'HIGH',
+  latitude,
+  longitude,
+  userId,
+  destination_lat,
+  destination_lng,
+  phone,
+  notes,
+  description,
+  photo_url,
+  is_manual_location = false,
+  quantity = 1,
+  idempotencyKey,
+}) {
   if (typeof latitude !== 'number' || typeof longitude !== 'number') {
     throw new Error('GPS coordinates are required to request emergency assistance.');
   }
 
   const body = {
-    ...(userId != null ? { userId } : {}), // the signed-in user's own id (no hard-coded user)
+    ...(userId != null ? { userId } : {}),
     type,
     priority,
     quantity,
     latitude,
     longitude,
+    ...(destination_lat != null ? { destination_lat } : {}),
+    ...(destination_lng != null ? { destination_lng } : {}),
+    ...(phone ? { phone } : {}),
+    ...(notes ? { notes } : {}),
+    ...(description ? { description } : {}),
+    ...(photo_url ? { photo_url } : {}),
+    is_manual_location: !!is_manual_location,
   };
 
   // the same key for the same form: a double tap or a retry after a timeout returns the first request instead of making a second
   const response = await http('/help-requests', { method: 'POST', body, headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined });
   lastMatch = response;
   return response;
+}
+
+export async function getHelpRequestTracking(requestId) {
+  return await http(`/help-requests/${requestId}/tracking`);
+}
+
+export async function cancelHelpRequest(requestId, reason = '') {
+  return await http(`/help-requests/${requestId}/cancel`, {
+    method: 'POST',
+    body: { reason },
+  });
+}
+
+export async function completeHelpRequest(requestId) {
+  return await http(`/help-requests/${requestId}/complete`, {
+    method: 'POST',
+  });
+}
+
+export async function deleteIncident(incidentId) {
+  return await http(`/incidents/${incidentId}`, {
+    method: 'DELETE',
+  });
 }
 
 // ── Admin-managed state shown to every user (public read endpoints) ──────────

@@ -1,10 +1,10 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import Header from '../../components/Header';
-import { Card, ErrorText, Pill, StateView, statusColor } from '../../components/ui';
+import { Card, ErrorText, Pill, SmallButton, StateView, statusColor } from '../../components/ui';
 import { FadeIn, staggerDelay } from '../../components/motion';
 import usePolling from '../../hooks/usePolling';
-import { getHelpRequests, getMatches } from '../../services/accountApi';
+import { getHelpRequests, getMatches, deleteHelpRequest } from '../../services/accountApi';
 import { timeAgo } from '../../services/geo';
 import { prettyResource } from '../../integration/volunteerAdapter';
 import { colors, fonts } from '../../theme';
@@ -12,11 +12,28 @@ import { colors, fonts } from '../../theme';
 export default function AdminRequests() {
   const reqs = usePolling(getHelpRequests, 6000);
   const matches = usePolling(getMatches, 6000);
+  const [busyId, setBusyId] = useState(null);
+  const [deleteError, setDeleteError] = useState('');
+
+  const onDeleteReq = async (id) => {
+    setBusyId(id);
+    setDeleteError('');
+    try {
+      await deleteHelpRequest(id);
+      if (reqs.reload) await reqs.reload();
+      if (matches.reload) await matches.reload();
+    } catch (e) {
+      setDeleteError(e?.detail || e?.message || 'Failed to delete request.');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   return (
     <View style={{ flex: 1 }}>
       <Header title="Requests" subtitle="Help requests and volunteer matches" />
       <ScrollView contentContainerStyle={styles.body}>
-        {reqs.data == null && reqs.error ? <StateView kind="error" title="Unable to load help requests." message={reqs.error} onRetry={reqs.reload} /> : <ErrorText>{reqs.error || matches.error}</ErrorText>}
+        {reqs.data == null && reqs.error ? <StateView kind="error" title="Unable to load help requests." message={reqs.error} onRetry={reqs.reload} /> : <ErrorText>{deleteError || reqs.error || matches.error}</ErrorText>}
         {reqs.data == null && !reqs.error ? <StateView kind="loading" /> : null}
         <Text style={styles.section}>Help requests ({(reqs.data || []).length})</Text>
         {reqs.data && reqs.data.length === 0 && <StateView kind="empty" compact icon="life-buoy" title="No help requests yet." message="Requests from people in the area appear here with their status and volunteer." />}
@@ -28,6 +45,14 @@ export default function AdminRequests() {
             </View>
             <Text style={styles.line}>Priority {r.priority} · {r.requester_name || `user #${r.user_id}`}{r.requester_phone ? ` (${r.requester_phone})` : ''} · {timeAgo(r.created_at)}</Text>
             {r.volunteer_name ? <Text style={styles.line}>Volunteer: {r.volunteer_name}{r.match_status ? ` (${r.match_status.toLowerCase()})` : ''}</Text> : null}
+            <View style={{ marginTop: 10, alignSelf: 'flex-start' }}>
+              <SmallButton
+                label={busyId === r.id ? 'Deleting…' : 'Delete'}
+                outline
+                disabled={busyId === r.id}
+                onPress={() => onDeleteReq(r.id)}
+              />
+            </View>
           </Card></FadeIn>
         ))}
         <Text style={styles.section}>Matches ({(matches.data || []).length})</Text>

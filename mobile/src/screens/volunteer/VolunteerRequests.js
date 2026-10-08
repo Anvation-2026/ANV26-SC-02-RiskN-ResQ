@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Linking, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Header from '../../components/Header';
 import ActionButton from '../../components/ActionButton';
 import { Card, ErrorText, Label, Notice, Segmented, StateView } from '../../components/ui';
@@ -11,7 +11,7 @@ import { timeAgo } from '../../services/geo';
 import { colors, fonts } from '../../theme';
 
 export default function VolunteerRequests({ navigate, active }) {
-  const { reqs, loading, error, markSeen, accept, complete } = useVolunteer();
+  const { reqs, loading, error, markSeen, accept, complete, enRoute, arrived, reject, cancel } = useVolunteer();
   const [tab, setTab] = useState('active');
   const [selected, setSelected] = useState(null); // match_id
   const [busy, setBusy] = useState(false);
@@ -34,6 +34,11 @@ export default function VolunteerRequests({ navigate, active }) {
 
   if (item) {
     const toAccept = item.match_status === 'MATCHED' || item.match_status === 'PROPOSED';
+    const isAccepted = item.match_status === 'ACCEPTED';
+    const isEnRoute = item.match_status === 'EN_ROUTE';
+    const isArrived = item.match_status === 'ARRIVED';
+    const isDone = item.match_status === 'COMPLETED';
+
     return (
       <View style={{ flex: 1, backgroundColor: colors.bg }}>
         <Header title="Request details" subtitle={`${prettyResource(item.type)} · #${item.request_id}`} />
@@ -43,7 +48,15 @@ export default function VolunteerRequests({ navigate, active }) {
           <Card>
             <View style={s.top}><Text style={s.type}>{prettyResource(item.type)}</Text><PriorityBadge priority={item.priority} /></View>
             <Label>STATUS</Label>
-            <Text style={s.value}>{toAccept ? 'ASSIGNED (waiting for you to accept)' : item.match_status}</Text>
+            <Text style={s.value}>
+              {toAccept
+                ? 'ASSIGNED (waiting for your acceptance)'
+                : isEnRoute
+                ? 'EN ROUTE TO CITIZEN'
+                : isArrived
+                ? 'ARRIVED AT SCENE'
+                : item.match_status}
+            </Text>
             <Label>LOCATION</Label>
             <Text style={s.value}>{item.zone || 'Unknown zone'}{item.latitude != null ? ` · ${item.latitude.toFixed(4)}, ${item.longitude.toFixed(4)}` : ''}</Text>
             {item.quantity > 1 ? (<><Label>QUANTITY NEEDED</Label><Text style={s.value}>{item.quantity}</Text></>) : null}
@@ -53,13 +66,81 @@ export default function VolunteerRequests({ navigate, active }) {
             <Text style={s.value}>{timeAgo(item.created_at)}</Text>
             {item.requester_name ? (<><Label>REQUESTER</Label><Text style={s.value}>{item.requester_name}{item.requester_phone ? ` · ${item.requester_phone}` : ''}</Text></>) : null}
           </Card>
-          {item.match_status !== 'COMPLETED' && (
+          {!isDone && (
             <View style={{ gap: 10 }}>
-              {toAccept && <ActionButton variant="primary" label={busy ? 'ACCEPTING…' : 'ACCEPT'} disabled={busy} color={colors.LOW}
-                onPress={() => run(() => accept(item.match_id), 'Unable to accept request. Please try again.', 'Request accepted. The person who asked can see that you are on the way.')} />}
-              {item.match_status === 'ACCEPTED' && <ActionButton variant="primary" label={busy ? 'SAVING…' : 'MARK AS COMPLETED'} disabled={busy} color={colors.LOW}
-                onPress={() => run(async () => { const r = await complete(item.match_id); if (r.ok) setSelected(null); return r; }, 'Unable to complete request. Please try again.', 'Request marked as completed. Thank you for helping.')} />}
-              <ActionButton variant="primary" label="SHOW ON MAP" color={colors.route} onPress={() => navigate('Map', { requestId: item.request_id })} />
+              {toAccept && (
+                <>
+                  <ActionButton
+                    variant="primary"
+                    label={busy ? 'ACCEPTING…' : 'ACCEPT ASSIGNMENT'}
+                    disabled={busy}
+                    color={colors.LOW}
+                    onPress={() => run(() => accept(item.match_id), 'Unable to accept request. Please try again.', 'Request accepted. The person who asked can see that you are on the way.')}
+                  />
+                  <ActionButton
+                    variant="primary"
+                    label={busy ? 'DECLINING…' : 'DECLINE / REJECT'}
+                    disabled={busy}
+                    color={colors.HIGH}
+                    onPress={() => run(async () => { const r = await reject(item.request_id); if (r.ok) setSelected(null); return r; }, 'Unable to decline request.')}
+                  />
+                </>
+              )}
+
+              {isAccepted && (
+                <>
+                  <ActionButton
+                    variant="primary"
+                    label={busy ? 'STARTING TRAVEL…' : 'START TRAVEL (EN ROUTE)'}
+                    disabled={busy}
+                    color="#0284C7"
+                    onPress={() => run(() => enRoute(item.request_id), 'Unable to update status.')}
+                  />
+                  <ActionButton
+                    variant="primary"
+                    label="CANCEL ASSIGNMENT"
+                    disabled={busy}
+                    color="#DC2626"
+                    onPress={() => run(async () => { const r = await cancel(item.request_id, 'Volunteer cancelled assignment'); if (r.ok) setSelected(null); return r; }, 'Unable to cancel.')}
+                  />
+                </>
+              )}
+
+              {isEnRoute && (
+                <ActionButton
+                  variant="primary"
+                  label={busy ? 'UPDATING…' : 'I HAVE ARRIVED AT SCENE'}
+                  disabled={busy}
+                  color={colors.LOW}
+                  onPress={() => run(() => arrived(item.request_id), 'Unable to update status.')}
+                />
+              )}
+
+              {isArrived && (
+                <ActionButton
+                  variant="primary"
+                  label={busy ? 'COMPLETING…' : 'MARK AS COMPLETED'}
+                  disabled={busy}
+                  color={colors.LOW}
+                  onPress={() => run(async () => { const r = await complete(item.match_id); if (r.ok) setSelected(null); return r; }, 'Unable to complete request. Please try again.')}
+                />
+              )}
+
+              {item.requester_phone ? (
+                <ActionButton
+                  variant="primary"
+                  label={`CALL CITIZEN (${item.requester_phone})`}
+                  color={colors.navy}
+                  onPress={() => Linking.openURL(`tel:${item.requester_phone}`).catch(() => {})}
+                />
+              ) : null}
+
+              <ActionButton
+                variant="primary"
+                label="SHOW ROUTE ON MAP"
+                color={colors.route}
+                onPress={() => navigate('Map', { requestId: item.request_id })}
+              />
             </View>
           )}
           <View style={{ marginTop: 10 }}><ActionButton variant="primary" label="BACK TO LIST" color={colors.navy} onPress={() => { setSelected(null); setMsg(''); }} /></View>

@@ -115,7 +115,7 @@ test('user asks for medicine and the nearby volunteer is matched', async ({ page
   await login(page, USER);
   await expect(text(page, 'CURRENT WEATHER')).toBeVisible({ timeout: 90_000 });
   await tab(page, 'Help').click();
-  await page.getByText('Medicine', { exact: true }).first().click();
+  await page.getByText('Medical Emergency', { exact: true }).first().click();   // matched to a Medicine volunteer by the backend
   await page.getByText('REQUEST ASSISTANCE', { exact: true }).click();
   await expect(text(page, VOLUNTEER.name)).toBeVisible({ timeout: 60_000 });
   await expect(text(page, /My requests/)).toBeVisible();
@@ -141,10 +141,13 @@ test('volunteer sees the request, accepts it, completes it', async ({ page }) =>
   await expect(page.locator('body')).not.toContainText(/Cannot reach|denied|unavailable on this device/i);
   await tab(page, 'Requests').click();
   await page.getByText('VIEW DETAILS', { exact: true }).first().click();
-  await page.getByText('ACCEPT', { exact: true }).click();
+  await page.getByText('ACCEPT ASSIGNMENT', { exact: true }).click();
   await expect(text(page, /ACCEPTED/)).toBeVisible({ timeout: 30_000 });
-  await expect(text(page, 'SHOW ON MAP')).toBeVisible();
-  await page.getByText('MARK AS COMPLETED', { exact: true }).click();
+  await expect(text(page, 'SHOW ROUTE ON MAP')).toBeVisible();
+  // full lifecycle: accepted -> en route -> arrived -> completed
+  await page.getByText('START TRAVEL (EN ROUTE)', { exact: true }).click();
+  await page.getByText('I HAVE ARRIVED AT SCENE', { exact: true }).click({ timeout: 30_000 });
+  await page.getByText('MARK AS COMPLETED', { exact: true }).click({ timeout: 30_000 });
   await expect(text(page, /completed/i)).toBeVisible({ timeout: 30_000 });
   await tab(page, 'Map').click();
   await expect(page.locator('.leaflet-container')).toBeVisible({ timeout: 60_000 });

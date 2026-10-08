@@ -28,6 +28,7 @@ from engine import (
     compute_risk,
     compute_trust,
     confidence_label,
+    does_route_intersect_incident,
     haversine_meters,
     now_iso,
     refresh_all,
@@ -89,8 +90,32 @@ def purge_photos() -> None:
 IncidentType = Literal["FLOOD", "BLOCKED_ROAD", "FLOODED_ROAD", "WATERLOGGING", "FALLEN_TREE", "TRAFFIC_OBSTRUCTION", "EMERGENCY", "OTHER"]
 IncidentStatus = Literal["REPORTED", "VERIFIED", "REJECTED", "RESOLVED"]
 Priority = Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]
-HELP_TYPES = ("MEDICINE", "FOOD", "WATER", "FIRST_AID", "EVACUATION", "TRANSPORT")
-HELP_ALIASES = {"EVACUATION_ASSISTANCE": "EVACUATION", "FIRSTAID": "FIRST_AID"}
+HELP_TYPES = (
+    "MEDICINE",
+    "FOOD",
+    "WATER",
+    "FIRST_AID",
+    "EVACUATION",
+    "TRANSPORT",
+    "MEDICAL_EMERGENCY",
+    "FLOOD_RESCUE",
+    "ELDERLY_ASSISTANCE",
+    "CHILD_ASSISTANCE",
+    "FOOD_WATER",
+    "OTHER_EMERGENCY",
+)
+HELP_ALIASES = {
+    "EVACUATION_ASSISTANCE": "EVACUATION",
+    "FIRSTAID": "FIRST_AID",
+    "OTHER": "OTHER_EMERGENCY",
+    "FOOD_/_WATER": "FOOD_WATER",
+    "FOOD/WATER": "FOOD_WATER",
+    "FOOD_AND_WATER": "FOOD_WATER",
+    "ELDERLY": "ELDERLY_ASSISTANCE",
+    "CHILD": "CHILD_ASSISTANCE",
+    "RESCUE": "FLOOD_RESCUE",
+    "MEDICINE_ASSISTANCE": "MEDICINE",
+}
 
 
 @asynccontextmanager
@@ -168,7 +193,12 @@ for _db_error in db.DB_ERRORS:  # SQLite and PostgreSQL errors both become a cle
 # ---------- Helpers & Serializers ----------
 
 def norm(value):
-    return value.strip().upper().replace(" ", "_").replace("-", "_") if isinstance(value, str) else value
+    if not isinstance(value, str):
+        return value
+    cleaned = value.strip().upper().replace("/", "_").replace("-", "_").replace(" ", "_")
+    while "__" in cleaned:
+        cleaned = cleaned.replace("__", "_")
+    return cleaned
 
 
 def one(c, table: str, row_id: int, label: str):
@@ -761,6 +791,20 @@ def resolve_incident(incident_id: int, admin: dict = Depends(auth.require_admin)
     return _set_incident_status(incident_id, "RESOLVED", admin)
 
 
+@app.delete("/incidents/{incident_id}")
+def delete_incident(incident_id: int, _: dict = Depends(auth.require_admin)):
+    with db.session() as c:
+        inc = dict(one(c, "incidents", incident_id, "Incident"))
+        if inc.get("photo_file"):
+            f = photo_file(inc["photo_file"])
+            if f and f.is_file():
+                f.unlink(missing_ok=True)
+        c.execute("DELETE FROM incidents WHERE id=?", (incident_id,))
+        if inc.get("zone"):
+            refresh_zone(c, inc["zone"])
+        return {"success": True, "deleted_id": incident_id}
+
+
 # ==========================================
 # 5. Incident-Aware Real Routing
 # ==========================================
@@ -879,9 +923,9 @@ def _disable_volunteer(c, v):
     if v["user_id"]:
         c.execute("UPDATE users SET is_active=0 WHERE id=?", (v["user_id"],))
         auth.revoke_user_sessions(c, v["user_id"])
-    for m in c.execute("SELECT * FROM matches WHERE volunteer_id=? AND status IN ('PROPOSED','MATCHED','ACCEPTED')", (v["id"],)).fetchall():
+    for m in c.execute("SELECT * FROM matches WHERE volunteer_id=? AND status IN ('PROPOSED','MATCHED','ACCEPTED','EN_ROUTE','ARRIVED')", (v["id"],)).fetchall():
         c.execute("UPDATE matches SET status='CANCELLED' WHERE id=?", (m["id"],))
-        c.execute("UPDATE help_requests SET status='OPEN' WHERE id=? AND status='MATCHED'", (m["help_request_id"],))
+        c.execute("UPDATE help_requests SET status='OPEN', assigned_volunteer_id=NULL WHERE id=? AND status IN ('MATCHED','ACCEPTED','EN_ROUTE','ARRIVED')", (m["help_request_id"],))
 
 
 def _enable_volunteer(c, v):
@@ -943,9 +987,17 @@ PRIORITY_RANK = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1}
 
 def _suitable(v, request_type: str) -> bool:
     """Does this volunteer's skill or listed resources cover the requested help type? (same rule the matcher uses)"""
+    if not request_type:
+        return False
     want = (request_type or "").strip().lower().replace("_", " ")
     have = f"{v['skill'] or ''} {dict(v).get('resources') or ''}".lower().replace("_", " ")
-    return bool(want) and want in have
+    if want in have:
+        return True
+    if want == "food water" and ("food" in have or "water" in have):
+        return True
+    if want == "medical emergency" and ("medicine" in have or "medical" in have):
+        return True
+    return False
 
 
 def _request_dict(c, v, r, **extra):
@@ -966,7 +1018,7 @@ def _my_requests(c, v):
     nearby_open = unassigned open requests I could fulfil, highest priority first then nearest (no requester details);
     completed = my finished requests."""
     assigned = []
-    for m in c.execute("SELECT * FROM matches WHERE volunteer_id=? AND status IN ('PROPOSED','MATCHED','ACCEPTED') ORDER BY id DESC", (v["id"],)):
+    for m in c.execute("SELECT * FROM matches WHERE volunteer_id=? AND status IN ('PROPOSED','MATCHED','ACCEPTED','EN_ROUTE','ARRIVED') ORDER BY id DESC", (v["id"],)):
         r = c.execute("SELECT * FROM help_requests WHERE id=?", (m["help_request_id"],)).fetchone()
         if not r:
             continue
@@ -1035,7 +1087,7 @@ def claim_request(request_id: int, user: dict = Depends(auth.require_volunteer))
         if v["status"] != "ACTIVE" or not v["available"]:
             raise HTTPException(409, "Set yourself as available before accepting requests.")
         r = one(c, "help_requests", request_id, "Help request")
-        if r["status"] != "OPEN" or c.execute("SELECT 1 FROM matches WHERE help_request_id=? AND status IN ('PROPOSED','MATCHED','ACCEPTED','COMPLETED')", (request_id,)).fetchone():
+        if r["status"] != "OPEN" or c.execute("SELECT 1 FROM matches WHERE help_request_id=? AND status IN ('PROPOSED','MATCHED','ACCEPTED','EN_ROUTE','ARRIVED','COMPLETED')", (request_id,)).fetchone():
             raise HTTPException(409, "This request is no longer open.")
         if not _suitable(v, r["type"]):
             raise HTTPException(422, "This request does not match your skills or resources.")
@@ -1209,6 +1261,13 @@ class HelpIn(BaseModel):
     quantity: int = Field(1, ge=1, le=1000)
     latitude: Optional[float] = Field(None, ge=-90, le=90)
     longitude: Optional[float] = Field(None, ge=-180, le=180)
+    destination_lat: Optional[float] = Field(None, ge=-90, le=90)
+    destination_lng: Optional[float] = Field(None, ge=-180, le=180)
+    phone: Optional[str] = None
+    notes: Optional[str] = None
+    description: Optional[str] = None
+    photo_url: Optional[str] = None
+    is_manual_location: bool = False
 
     _norm_p = field_validator("priority", mode="before")(norm)
 
@@ -1240,10 +1299,27 @@ def request_visible(c, user: dict, r) -> bool:
 @app.post("/help-request", status_code=status.HTTP_201_CREATED)
 def create_help(body: HelpIn, user: dict = Depends(auth.current_user)):
     with db.session() as c:
+        t = db.now()
         cur = c.execute(
-            "INSERT INTO help_requests(user_id,type,priority,latitude,longitude,status,created_at,quantity) "
-            "VALUES(?,?,?,?,?,'OPEN',?,?)",
-            (user["id"], body.type, body.priority, body.latitude, body.longitude, db.now(), body.quantity),
+            "INSERT INTO help_requests(user_id,type,priority,latitude,longitude,destination_lat,destination_lng,phone,notes,description,photo_url,is_manual_location,status,created_at,updated_at,quantity) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'OPEN',?,?,?)",
+            (
+                user["id"],
+                body.type,
+                body.priority,
+                body.latitude,
+                body.longitude,
+                body.destination_lat,
+                body.destination_lng,
+                body.phone or user.get("phone"),
+                body.notes,
+                body.description,
+                body.photo_url,
+                1 if body.is_manual_location else 0,
+                t,
+                t,
+                body.quantity,
+            ),
         )
         row = dict(one(c, "help_requests", cur.lastrowid, "Help request"))
         _log_event(c, row["id"], "REQUESTED", f"{body.type} ({body.priority})")
@@ -1257,6 +1333,13 @@ class HelpRequestIn(BaseModel):
     priority: Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"] = "HIGH"
     latitude: float = Field(..., ge=-90.0, le=90.0)
     longitude: float = Field(..., ge=-180.0, le=180.0)
+    destination_lat: Optional[float] = Field(None, ge=-90.0, le=90.0)
+    destination_lng: Optional[float] = Field(None, ge=-180.0, le=180.0)
+    phone: Optional[str] = None
+    notes: Optional[str] = None
+    description: Optional[str] = None
+    photo_url: Optional[str] = None
+    is_manual_location: bool = False
 
 
 @app.post("/help-requests", status_code=status.HTTP_201_CREATED)
@@ -1267,9 +1350,25 @@ def request_help(body: HelpRequestIn, user: dict = Depends(auth.current_user), i
     c = db.conn()
     now_t = now_iso()
     cur = c.execute(
-        "INSERT INTO help_requests(user_id, type, priority, latitude, longitude, status, created_at, quantity) "
-        "VALUES (?,?,?,?,?,'OPEN',?,?)",
-        (user["id"], body.type, body.priority, body.latitude, body.longitude, now_t, body.quantity),  # owner = the signed-in user, never the body
+        "INSERT INTO help_requests(user_id, type, priority, latitude, longitude, destination_lat, destination_lng, phone, notes, description, photo_url, is_manual_location, status, created_at, updated_at, quantity) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'OPEN',?,?,?)",
+        (
+            user["id"],
+            body.type,
+            body.priority,
+            body.latitude,
+            body.longitude,
+            body.destination_lat,
+            body.destination_lng,
+            body.phone or user.get("phone"),
+            body.notes,
+            body.description,
+            body.photo_url,
+            1 if body.is_manual_location else 0,
+            now_t,
+            now_t,
+            body.quantity,
+        ),
     )
     req_id = cur.lastrowid
     _log_event(c, req_id, "REQUESTED", f"{body.type} ({body.priority})")
@@ -1285,7 +1384,7 @@ def request_help(body: HelpRequestIn, user: dict = Depends(auth.current_user), i
     for r in rows:
         v = dict(r)
         skills_str = (v.get("skill", "") + " " + v.get("resources", "")).lower()
-        if req_lower in skills_str or (req_lower == "medicine" and "medicine" in skills_str):
+        if _suitable(v, body.type) or req_lower in skills_str or (req_lower == "medicine" and "medicine" in skills_str):
             d = haversine_meters(body.latitude, body.longitude, v["latitude"], v["longitude"])
             if d < best_dist:
                 best_dist = d
@@ -1308,7 +1407,7 @@ def request_help(body: HelpRequestIn, user: dict = Depends(auth.current_user), i
             "VALUES (?,?,?,?,?,'MATCHED',?)",
             (req_id, best_vol["id"], dist_km, eta_min, score, now_t),
         )
-        c.execute("UPDATE help_requests SET status='MATCHED' WHERE id=?", (req_id,))
+        c.execute("UPDATE help_requests SET status='MATCHED', assigned_volunteer_id=?, updated_at=? WHERE id=?", (best_vol["id"], now_t, req_id))
         _log_event(c, req_id, "MATCHED", f"{best_vol['name']}, {dist_km} km away, about {eta_min} min")
         _tell_volunteer(c, best_vol["id"], "New help request near you",
                         f"{body.type.replace('_', ' ').title()} needed ({body.priority.lower()} priority), {dist_km} km away.", req_id)
@@ -1349,7 +1448,7 @@ def request_help(body: HelpRequestIn, user: dict = Depends(auth.current_user), i
 
 
 @app.get("/help-requests")
-def list_help(status: Optional[Literal["OPEN", "MATCHED", "COMPLETED"]] = None, user: dict = Depends(auth.current_user)):
+def list_help(status: Optional[str] = None, user: dict = Depends(auth.current_user)):
     q, args = "SELECT * FROM help_requests WHERE 1=1", []
     if status:
         q += " AND status=?"; args.append(status)
@@ -1379,29 +1478,274 @@ def get_help(request_id: int, user: dict = Depends(auth.current_user)):
         return dict(r)
 
 
-@app.get("/help-requests/{request_id}/tracking")
-def track_help(request_id: int, user: dict = Depends(auth.current_user)):
-    """Progress of one help request: status timeline plus, once a volunteer is assigned, their live distance and ETA."""
+@app.delete("/help-requests/{request_id}")
+def delete_help_request(request_id: int, user: dict = Depends(auth.current_user)):
     with db.session() as c:
-        r = one(c, "help_requests", request_id, "Help request")
+        r = dict(one(c, "help_requests", request_id, "Help request"))
+        if user["role"] != auth.ROLE_ADMIN and r["user_id"] != user["id"]:
+            raise HTTPException(403, "Not authorized to delete this help request.")
+        m = c.execute("SELECT volunteer_id FROM matches WHERE help_request_id=? AND status!='CANCELLED'", (request_id,)).fetchone()
+        if m and m["volunteer_id"]:
+            c.execute("UPDATE volunteers SET available=1 WHERE id=?", (m["volunteer_id"],))
+        c.execute("DELETE FROM matches WHERE help_request_id=?", (request_id,))
+        c.execute("DELETE FROM help_requests WHERE id=?", (request_id,))
+        return {"success": True, "deleted_id": request_id}
+
+
+class CancelIn(BaseModel):
+    reason: Optional[str] = None
+
+
+@app.post("/help-requests/{request_id}/accept")
+def accept_help_request(request_id: int, user: dict = Depends(auth.require_roles(auth.ROLE_VOLUNTEER, auth.ROLE_ADMIN))):
+    with db.session() as c:
+        r = dict(one(c, "help_requests", request_id, "Help request"))
+        now_t = db.now()
+        if r["status"] in ("COMPLETED", "CANCELLED"):
+            raise HTTPException(409, f"Request is already {r['status'].lower()}.")
+        if user["role"] == auth.ROLE_VOLUNTEER:
+            v = _my_row(c, user)
+            if v["status"] != "ACTIVE":
+                raise HTTPException(403, "This volunteer account is disabled.")
+            vol_id = v["id"]
+        else:
+            vol_id = r.get("assigned_volunteer_id")
+            if not vol_id:
+                first_v = c.execute("SELECT id FROM volunteers WHERE status='ACTIVE' ORDER BY id LIMIT 1").fetchone()
+                vol_id = first_v["id"] if first_v else None
+            if not vol_id:
+                raise HTTPException(404, "No active volunteer available to assign to this request.")
+            v = one(c, "volunteers", vol_id, "Volunteer")
+
+        m = c.execute("SELECT * FROM matches WHERE help_request_id=? AND status NOT IN ('CANCELLED','REJECTED') ORDER BY id DESC", (request_id,)).fetchone()
+        if m:
+            if m["volunteer_id"] != vol_id and user["role"] != auth.ROLE_ADMIN:
+                raise HTTPException(409, "This request is assigned to another volunteer.")
+            c.execute("UPDATE matches SET status='ACCEPTED' WHERE id=?", (m["id"],))
+            match_id = m["id"]
+        else:
+            dist = None
+            if None not in (r["latitude"], r["longitude"], v["latitude"], v["longitude"]):
+                dist = round(_km(v["latitude"], v["longitude"], r["latitude"], r["longitude"]), 2)
+            cur = c.execute(
+                "INSERT INTO matches(help_request_id, volunteer_id, distance_km, eta_minutes, status, created_at) "
+                "VALUES (?,?,?,?,'ACCEPTED',?)",
+                (request_id, vol_id, dist or 0.0, max(1, round((dist or 0) / 25.0 * 60)), now_t),
+            )
+            match_id = cur.lastrowid
+
+        c.execute("UPDATE help_requests SET status='ACCEPTED', assigned_volunteer_id=?, updated_at=? WHERE id=?", (vol_id, now_t, request_id))
+        c.execute("UPDATE volunteers SET available=0 WHERE id=?", (vol_id,))
+        _log_event(c, request_id, "ACCEPTED", f"{v['name']} accepted the request")
+        _tell_requester(c, request_id, "A volunteer accepted your request", f"{v['name']} is on the way to help.")
+        return {
+            "status": "ACCEPTED",
+            "request": dict(one(c, "help_requests", request_id, "Help request")),
+            "match": match_out(c, one(c, "matches", match_id, "Match")),
+        }
+
+
+@app.post("/help-requests/{request_id}/en-route")
+def en_route_help_request(request_id: int, user: dict = Depends(auth.require_roles(auth.ROLE_VOLUNTEER, auth.ROLE_ADMIN))):
+    with db.session() as c:
+        r = dict(one(c, "help_requests", request_id, "Help request"))
+        if user["role"] == auth.ROLE_VOLUNTEER:
+            v = _my_row(c, user)
+            if r.get("assigned_volunteer_id") != v["id"]:
+                raise HTTPException(403, "You are not assigned to this request.")
+        now_t = db.now()
+        c.execute("UPDATE help_requests SET status='EN_ROUTE', updated_at=? WHERE id=?", (now_t, request_id))
+        c.execute("UPDATE matches SET status='EN_ROUTE' WHERE help_request_id=? AND status IN ('MATCHED', 'ACCEPTED')", (request_id,))
+        _log_event(c, request_id, "EN_ROUTE", "Volunteer is on the way")
+        return {
+            "status": "EN_ROUTE",
+            "request": dict(one(c, "help_requests", request_id, "Help request")),
+        }
+
+
+@app.post("/help-requests/{request_id}/arrived")
+def arrived_help_request(request_id: int, user: dict = Depends(auth.require_roles(auth.ROLE_VOLUNTEER, auth.ROLE_ADMIN))):
+    with db.session() as c:
+        r = dict(one(c, "help_requests", request_id, "Help request"))
+        if user["role"] == auth.ROLE_VOLUNTEER:
+            v = _my_row(c, user)
+            if r.get("assigned_volunteer_id") != v["id"]:
+                raise HTTPException(403, "You are not assigned to this request.")
+        now_t = db.now()
+        c.execute("UPDATE help_requests SET status='ARRIVED', updated_at=? WHERE id=?", (now_t, request_id))
+        c.execute("UPDATE matches SET status='ARRIVED' WHERE help_request_id=? AND status IN ('MATCHED', 'ACCEPTED', 'EN_ROUTE')", (request_id,))
+        _log_event(c, request_id, "ARRIVED", "Volunteer has arrived")
+        return {
+            "status": "ARRIVED",
+            "request": dict(one(c, "help_requests", request_id, "Help request")),
+        }
+
+
+@app.post("/help-requests/{request_id}/complete")
+def complete_help_request(request_id: int, user: dict = Depends(auth.current_user)):
+    with db.session() as c:
+        r = dict(one(c, "help_requests", request_id, "Help request"))
+        if user["role"] not in (auth.ROLE_ADMIN, auth.ROLE_VOLUNTEER) and r["user_id"] != user["id"]:
+            raise HTTPException(403, "Not authorized to complete this request.")
+        now_t = db.now()
+        c.execute("UPDATE help_requests SET status='COMPLETED', updated_at=? WHERE id=?", (now_t, request_id))
+        c.execute("UPDATE matches SET status='COMPLETED' WHERE help_request_id=? AND status!='CANCELLED'", (request_id,))
+        vol_id = r.get("assigned_volunteer_id")
+        if not vol_id:
+            m = c.execute("SELECT volunteer_id FROM matches WHERE help_request_id=? ORDER BY id DESC LIMIT 1", (request_id,)).fetchone()
+            if m:
+                vol_id = m["volunteer_id"]
+        if vol_id:
+            c.execute("UPDATE volunteers SET available=1 WHERE id=?", (vol_id,))
+        _log_event(c, request_id, "COMPLETED", "Request completed")
+        return {
+            "status": "COMPLETED",
+            "request": dict(one(c, "help_requests", request_id, "Help request")),
+        }
+
+
+@app.post("/help-requests/{request_id}/cancel")
+def cancel_help_request(request_id: int, body: Optional[CancelIn] = None, user: dict = Depends(auth.current_user)):
+    with db.session() as c:
+        r = dict(one(c, "help_requests", request_id, "Help request"))
+        if user["role"] != auth.ROLE_ADMIN and r["user_id"] != user["id"]:
+            if user["role"] == auth.ROLE_VOLUNTEER:
+                v = _my_row(c, user)
+                if r.get("assigned_volunteer_id") != v["id"]:
+                    raise HTTPException(403, "Not authorized to cancel this request.")
+            else:
+                raise HTTPException(403, "Not authorized to cancel this request.")
+        now_t = db.now()
+        reason = body.reason if body and body.reason else "Cancelled by user"
+        c.execute("UPDATE help_requests SET status='CANCELLED', cancellation_reason=?, updated_at=? WHERE id=?", (reason, now_t, request_id))
+        c.execute("UPDATE matches SET status='CANCELLED' WHERE help_request_id=?", (request_id,))
+        vol_id = r.get("assigned_volunteer_id")
+        if vol_id:
+            c.execute("UPDATE volunteers SET available=1 WHERE id=?", (vol_id,))
+        _log_event(c, request_id, "CANCELLED", reason)
+        return {
+            "status": "CANCELLED",
+            "cancellation_reason": reason,
+            "request": dict(one(c, "help_requests", request_id, "Help request")),
+        }
+
+
+@app.post("/help-requests/{request_id}/reject")
+def reject_help_request(request_id: int, user: dict = Depends(auth.require_roles(auth.ROLE_VOLUNTEER, auth.ROLE_ADMIN))):
+    with db.session() as c:
+        r = dict(one(c, "help_requests", request_id, "Help request"))
+        now_t = db.now()
+        vol_id = None
+        if user["role"] == auth.ROLE_VOLUNTEER:
+            v = _my_row(c, user)
+            vol_id = v["id"]
+            mine = c.execute("SELECT 1 FROM matches WHERE help_request_id=? AND volunteer_id=? AND status IN ('PROPOSED','MATCHED','ACCEPTED','EN_ROUTE','ARRIVED')", (request_id, vol_id)).fetchone()
+            if r.get("assigned_volunteer_id") != vol_id and not mine:
+                raise HTTPException(403, "You are not assigned to this request.")
+        else:
+            vol_id = r.get("assigned_volunteer_id")
+        if r["status"] in ("COMPLETED", "CANCELLED"):
+            raise HTTPException(409, f"Request is already {r['status'].lower()}.")
+        if vol_id:
+            c.execute("UPDATE matches SET status='REJECTED' WHERE help_request_id=? AND volunteer_id=?", (request_id, vol_id))
+            c.execute("UPDATE volunteers SET available=1 WHERE id=?", (vol_id,))
+        c.execute("UPDATE help_requests SET status='OPEN', assigned_volunteer_id=NULL, updated_at=? WHERE id=?", (now_t, request_id))
+        _log_event(c, request_id, "REJECTED", "Volunteer declined; request returned to the open pool")
+        return {
+            "status": "OPEN",
+            "message": "Request returned to open pool.",
+            "request": dict(one(c, "help_requests", request_id, "Help request")),
+        }
+
+
+@app.get("/help-requests/{request_id}/tracking")
+async def get_help_request_tracking(request_id: int, user: dict = Depends(auth.current_user)):
+    with db.session() as c:
+        r = dict(one(c, "help_requests", request_id, "Help request"))
         if not request_visible(c, user, r):
             raise HTTPException(404, f"Help request {request_id} not found")
-        events = [dict(e) for e in c.execute("SELECT event, detail, at FROM match_events WHERE help_request_id=? ORDER BY id", (request_id,))]
-        m = c.execute("SELECT * FROM matches WHERE help_request_id=? AND status!='CANCELLED' ORDER BY id DESC", (request_id,)).fetchone()
-        volunteer = None
-        if m:
-            v = c.execute("SELECT * FROM volunteers WHERE id=?", (m["volunteer_id"],)).fetchone()
-            if v:
-                dist = None
-                if None not in (v["latitude"], v["longitude"], r["latitude"], r["longitude"]):
-                    dist = round(_km(v["latitude"], v["longitude"], r["latitude"], r["longitude"]), 2)
-                active = m["status"] in ("MATCHED", "PROPOSED", "ACCEPTED")
-                volunteer = {"name": v["name"], "phone": v["phone"] if m["status"] in ("ACCEPTED", "COMPLETED") else None,
-                             "latitude": v["latitude"] if active else None, "longitude": v["longitude"] if active else None,
-                             "distance_km": dist, "eta_minutes": max(1, round(dist / 25.0 * 60)) if dist is not None and active else None,
-                             "location_updated": v["last_location_update"]}
-        return {"request_id": request_id, "type": r["type"], "priority": r["priority"], "status": r["status"],
-                "match_status": m["status"] if m else None, "volunteer": volunteer, "timeline": events}
+
+        vol_id = r.get("assigned_volunteer_id")
+        if not vol_id:
+            m_chk = c.execute("SELECT volunteer_id FROM matches WHERE help_request_id=? AND status!='CANCELLED' ORDER BY id DESC LIMIT 1", (request_id,)).fetchone()
+            if m_chk:
+                vol_id = m_chk["volunteer_id"]
+
+        vol_row = None
+        if vol_id:
+            raw_v = c.execute("SELECT * FROM volunteers WHERE id=?", (vol_id,)).fetchone()
+            if raw_v:
+                vol_row = dict(raw_v)
+
+        match_raw = c.execute(
+            "SELECT * FROM matches WHERE help_request_id=? AND status!='CANCELLED' ORDER BY id DESC LIMIT 1",
+            (request_id,)
+        ).fetchone()
+        match_row = dict(match_raw) if match_raw else None
+        match_data = match_out(c, match_raw) if match_raw else None
+        timeline = [dict(e) for e in c.execute("SELECT event, detail, at FROM match_events WHERE help_request_id=? ORDER BY id", (request_id,))]
+        shared = bool(match_row and match_row["status"] in ("ACCEPTED", "EN_ROUTE", "ARRIVED", "COMPLETED"))
+
+        req_u = c.execute("SELECT name, phone FROM users WHERE id=?", (r["user_id"],)).fetchone() if r.get("user_id") else None
+        req_user = dict(req_u) if req_u else None
+
+    dist_km = None
+    eta_min = None
+    route_polyline = None
+    if vol_row and None not in (r["latitude"], r["longitude"], vol_row["latitude"], vol_row["longitude"]):
+        meters = haversine_meters(vol_row["latitude"], vol_row["longitude"], r["latitude"], r["longitude"])
+        dist_km = round(meters / 1000.0, 2)
+        eta_min = max(1, round(dist_km / 25.0 * 60))
+        try:
+            cand = await routing_provider.compute_routes(
+                RoutePoint(latitude=vol_row["latitude"], longitude=vol_row["longitude"]),
+                RoutePoint(latitude=r["latitude"], longitude=r["longitude"]),
+            )
+            if cand:
+                route_polyline = cand[0].polyline
+                dist_km = round(cand[0].distance_meters / 1000.0, 2)
+                eta_min = cand[0].eta_minutes
+        except Exception:
+            route_polyline = [[vol_row["latitude"], vol_row["longitude"]], [r["latitude"], r["longitude"]]]
+
+    return {
+        "request_id": r["id"],
+        "status": r["status"],
+        "type": r["type"],
+        "priority": r["priority"],
+        "created_at": r["created_at"],
+        "updated_at": r.get("updated_at") or r["created_at"],
+        "requester": {
+            "id": r["user_id"],
+            "name": req_user["name"] if req_user else "Requester",
+            "phone": r.get("phone") or (req_user["phone"] if req_user else None),
+            "latitude": r["latitude"],
+            "longitude": r["longitude"],
+            "destination_lat": r.get("destination_lat"),
+            "destination_lng": r.get("destination_lng"),
+            "notes": r.get("notes"),
+            "description": r.get("description"),
+            "is_manual_location": bool(r.get("is_manual_location")),
+        },
+        "volunteer": {
+            "id": vol_row["id"],
+            "name": vol_row["name"],
+            "skill": vol_row["skill"],
+            "phone": vol_row.get("phone") if shared else None,
+            "latitude": vol_row["latitude"] if r["status"] != "COMPLETED" else None,
+            "longitude": vol_row["longitude"] if r["status"] != "COMPLETED" else None,
+            "available": bool(vol_row["available"]),
+            "last_location_update": vol_row.get("last_location_update"),
+            "distance_km": dist_km if dist_km is not None else (match_row.get("distance_km") if match_row else None),
+            "eta_minutes": eta_min if eta_min is not None else (match_row.get("eta_minutes") if match_row else None),
+        } if vol_row else None,
+        "match": match_data,
+        "match_status": match_row["status"] if match_row else None,
+        "timeline": timeline,
+        "distance_km": dist_km if dist_km is not None else (match_row.get("distance_km") if match_row else None),
+        "eta_minutes": eta_min if eta_min is not None else (match_row.get("eta_minutes") if match_row else None),
+        "polyline": route_polyline,
+    }
 
 
 # ---------- Matches ----------
@@ -1478,6 +1822,7 @@ def _match_action(match_id: int, user: dict, expect: str, new_status: str):
                     q[req["type"]] = max(0, int(q[req["type"]]) - int(req["quantity"] or 1))
                     c.execute("UPDATE volunteers SET quantities=? WHERE id=?", (json.dumps(q), v["id"]))
             _tell_requester(c, m["help_request_id"], "Your help request is complete", "The volunteer marked your request as completed.")
+            c.execute("UPDATE volunteers SET available=1 WHERE id=?", (m["volunteer_id"],))
         return match_out(c, one(c, "matches", match_id, "Match"))
 
 
@@ -1489,7 +1834,7 @@ def accept_match(match_id: int, user: dict = Depends(auth.require_roles(auth.ROL
 
 @app.post("/matches/{match_id}/complete")
 def complete_match(match_id: int, user: dict = Depends(auth.require_roles(auth.ROLE_VOLUNTEER, auth.ROLE_ADMIN))):
-    return _match_action(match_id, user, "ACCEPTED", "COMPLETED")
+    return _match_action(match_id, user, ("ACCEPTED", "EN_ROUTE", "ARRIVED"), "COMPLETED")
 
 
 # ==========================================
@@ -1509,7 +1854,7 @@ def admin_summary(_: dict = Depends(auth.require_admin)):
             "blocked_roads": roads_blocked,
             "pending_help_requests": n("SELECT COUNT(*) FROM help_requests WHERE status='OPEN'"),
             "available_volunteers": n("SELECT COUNT(*) FROM volunteers WHERE status='ACTIVE' AND available=1"),
-            "open_matches": n("SELECT COUNT(*) FROM matches WHERE status IN ('PROPOSED','MATCHED','ACCEPTED')"),
+            "open_matches": n("SELECT COUNT(*) FROM matches WHERE status IN ('PROPOSED','MATCHED','ACCEPTED','EN_ROUTE','ARRIVED')"),
             "users": {role: n(f"SELECT COUNT(*) FROM users WHERE role='{role}'") for role in (auth.ROLE_USER, auth.ROLE_VOLUNTEER, auth.ROLE_ADMIN)},
             "notice": DATA_NOTICE,
         }
@@ -1729,6 +2074,7 @@ def _intel_to_risk(a: dict, env) -> dict:
 async def sync_telemetry(
     latitude: float = Query(..., ge=-90.0, le=90.0),
     longitude: float = Query(..., ge=-180.0, le=180.0),
+    user: Optional[dict] = Depends(auth.optional_user),
 ):
     """Synchronizes live risk, weather, incidents, and responder presence in a single payload. Risk and weather come from
     the backend's cached monitoring grid, so a phone never triggers a weather or satellite request; only a position outside
@@ -1777,6 +2123,65 @@ async def sync_telemetry(
                      "warning_level": "NONE", "reason": "Insufficient data to estimate current flood risk.", "insufficient": True, "mode": "NO LIVE DATA",
                      "signals": [], "missing": [], "sources": [], "explanation": [], "probability": None, "recommended_action": None}
 
+    active_assistance = None
+    if user:
+        if user.get("role") == auth.ROLE_USER:
+            req_row = c.execute(
+                "SELECT * FROM help_requests WHERE user_id=? AND status NOT IN ('COMPLETED', 'CANCELLED') ORDER BY id DESC LIMIT 1",
+                (user["id"],),
+            ).fetchone()
+            if req_row:
+                req = dict(req_row)
+                vol = None
+                vol_id = req.get("assigned_volunteer_id")
+                if vol_id:
+                    v_row = c.execute("SELECT id, name, skill, phone, latitude, longitude, available, last_location_update FROM volunteers WHERE id=?", (vol_id,)).fetchone()
+                    if v_row:
+                        vol = dict(v_row)
+                m_row = c.execute("SELECT * FROM matches WHERE help_request_id=? AND status!='CANCELLED' ORDER BY id DESC LIMIT 1", (req["id"],)).fetchone()
+                active_assistance = {
+                    "role": "requester",
+                    "request_id": req["id"],
+                    "status": req["status"],
+                    "type": req["type"],
+                    "priority": req["priority"],
+                    "destination_lat": req.get("destination_lat"),
+                    "destination_lng": req.get("destination_lng"),
+                    "volunteer": vol,
+                    "match": dict(m_row) if m_row else None,
+                    "distance_km": m_row["distance_km"] if m_row else None,
+                    "eta_minutes": m_row["eta_minutes"] if m_row else None,
+                }
+        elif user.get("role") == auth.ROLE_VOLUNTEER:
+            v_row = c.execute("SELECT * FROM volunteers WHERE user_id=?", (user["id"],)).fetchone()
+            if v_row:
+                m_row = c.execute(
+                    "SELECT m.*, r.type as req_type, r.priority as req_priority, r.latitude as req_lat, r.longitude as req_lng, r.status as req_status, r.phone as req_phone "
+                    "FROM matches m JOIN help_requests r ON r.id=m.help_request_id "
+                    "WHERE m.volunteer_id=? AND m.status IN ('MATCHED', 'ACCEPTED', 'EN_ROUTE', 'ARRIVED') "
+                    "ORDER BY m.id DESC LIMIT 1",
+                    (v_row["id"],),
+                ).fetchone()
+                if m_row:
+                    req_u = c.execute("SELECT name, phone FROM users WHERE id=(SELECT user_id FROM help_requests WHERE id=?)", (m_row["help_request_id"],)).fetchone()
+                    active_assistance = {
+                        "role": "volunteer",
+                        "request_id": m_row["help_request_id"],
+                        "match_id": m_row["id"],
+                        "status": m_row["req_status"],
+                        "match_status": m_row["status"],
+                        "type": m_row["req_type"],
+                        "priority": m_row["req_priority"],
+                        "requester": {
+                            "name": req_u["name"] if req_u else "Requester",
+                            "phone": m_row["req_phone"] or (req_u["phone"] if req_u else None),
+                            "latitude": m_row["req_lat"],
+                            "longitude": m_row["req_lng"],
+                        },
+                        "distance_km": m_row["distance_km"],
+                        "eta_minutes": m_row["eta_minutes"],
+                    }
+
     c.close()
 
     return {
@@ -1785,4 +2190,5 @@ async def sync_telemetry(
         "weather": weather,
         "incidents": incidents,
         "volunteers": volunteers,
+        "active_assistance": active_assistance,
     }

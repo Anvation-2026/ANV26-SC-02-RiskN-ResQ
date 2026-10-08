@@ -70,8 +70,23 @@ async def plan_route(c, routing_provider, origin, destination) -> dict:
     if not clean:
         reason = "Every available route crosses a blocked road or reported incident; this is the one with the fewest. Consider waiting or using a designated evacuation point."
     avoided_summary = [{"id": i["id"], "type": i["type"], "description": i.get("description", ""), "latitude": i["latitude"], "longitude": i["longitude"]} for i in avoided_incidents]
+    primary = scored[0]
+    pc = primary["candidate"]
+    primary_hits = len(primary["incidents"]) + len(primary["blocked"])
+    changed = best is not primary
+    if primary_hits and changed:
+        route_status = "HAZARD_AVOIDED"
+    elif primary_hits:
+        route_status = "AFFECTED"
+    else:
+        route_status = "CLEAR"
     return {
-        **base, "success": True, "distanceMeters": sel.distance_meters, "distanceKm": round(sel.distance_meters / 1000.0, 2), "distance_km": round(sel.distance_meters / 1000.0, 2),
+        **base, "success": True, "status": route_status, "hasAlternate": changed,
+        "primaryRoute": {"distanceKm": round(pc.distance_meters / 1000.0, 2), "etaMinutes": pc.eta_minutes, "polyline": pc.polyline,
+                         "intersections": primary_hits, "summary": pc.summary},
+        "alternateRoute": {"distanceKm": round(sel.distance_meters / 1000.0, 2), "etaMinutes": sel.eta_minutes, "polyline": sel.polyline,
+                           "avoidedCount": len(avoided_summary), "summary": sel.summary} if changed else None,
+        "distanceMeters": sel.distance_meters, "distanceKm": round(sel.distance_meters / 1000.0, 2), "distance_km": round(sel.distance_meters / 1000.0, 2),
         "durationSeconds": sel.duration_seconds, "etaMinutes": sel.eta_minutes, "eta_minutes": sel.eta_minutes, "polyline": sel.polyline, "recommended_route": sel.polyline,
         "traffic": sel.traffic, "summary": sel.summary, "avoidedIncidents": avoided_summary, "avoided_roads": avoided_roads, "risk_information": risk_info,
         "reason": reason, "source": sel.source, "validatedAgainstIncidents": True, "safetyNote": ROUTE_NOTE, "generatedAt": now_iso(),

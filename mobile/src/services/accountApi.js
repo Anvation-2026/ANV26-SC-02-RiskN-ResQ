@@ -17,6 +17,12 @@ export const getMyRequests = () => http('/volunteers/me/requests');
 export const claimRequest = (requestId) => http(`/help-requests/${requestId}/claim`, { method: 'POST' });
 export const acceptMatch = (id) => http(`/matches/${id}/accept`, { method: 'POST' });
 export const completeMatch = (id) => http(`/matches/${id}/complete`, { method: 'POST' });
+export const enRouteRequest = (requestId) => http(`/help-requests/${requestId}/en-route`, { method: 'POST' });
+export const arrivedRequest = (requestId) => http(`/help-requests/${requestId}/arrived`, { method: 'POST' });
+export const completeHelpRequest = (requestId) => http(`/help-requests/${requestId}/complete`, { method: 'POST' });
+export const cancelHelpRequest = (requestId, reason = '') => http(`/help-requests/${requestId}/cancel`, { method: 'POST', body: { reason } });
+export const rejectHelpRequest = (requestId) => http(`/help-requests/${requestId}/reject`, { method: 'POST' });
+export const getHelpRequestTracking = (requestId) => http(`/help-requests/${requestId}/tracking`);
 
 // ── super admin ──
 export const getAdminSummary = () => http('/admin/summary');
@@ -28,6 +34,8 @@ export const updateVolunteer = (id, body) => http(`/volunteers/${id}`, { method:
 export const disableVolunteer = (id) => http(`/volunteers/${id}`, { method: 'DELETE' });
 export const getAllIncidents = () => http('/incidents');
 export const setIncident = (id, action) => http(`/incidents/${id}/${action}`, { method: 'POST' });
+export const deleteIncident = (id) => http(`/incidents/${id}`, { method: 'DELETE' });
+export const deleteHelpRequest = (id) => http(`/help-requests/${id}`, { method: 'DELETE' });
 export const getAllRoads = () => http('/roads');
 export const setRoad = (id, blocked) => http(`/roads/${id}/${blocked ? 'block' : 'unblock'}`, { method: 'POST' });
 export const simulateRain = (rainfall) => http('/simulate-hazard', { method: 'POST', body: { hazard: 'FLOOD', rainfall } });

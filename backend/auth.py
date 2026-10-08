@@ -132,6 +132,28 @@ def current_user(token: str = Depends(current_token)) -> dict:
         return dict(row)
 
 
+def optional_user(authorization: Optional[str] = Header(None)) -> Optional[dict]:
+    if not authorization:
+        return None
+    try:
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() != "bearer" or not token.strip():
+            return None
+        with db.session() as c:
+            row = c.execute(
+                "SELECT u.*, s.expires_at FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash=?",
+                (_hash_token(token.strip()),)).fetchone()
+            if not row:
+                return None
+            if datetime.fromisoformat(row["expires_at"]) < datetime.now(timezone.utc):
+                return None
+            if not row["is_active"]:
+                return None
+            return dict(row)
+    except Exception:
+        return None
+
+
 def require_roles(*roles: str):
     def dependency(user: dict = Depends(current_user)) -> dict:
         if user["role"] not in roles:

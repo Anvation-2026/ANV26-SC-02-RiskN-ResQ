@@ -4,7 +4,7 @@ import Header from '../../components/Header';
 import { Card, ConfirmDialog, ErrorText, Pill, SmallButton, StateView, statusColor } from '../../components/ui';
 import { errorText } from '../../context/AuthContext';
 import usePolling from '../../hooks/usePolling';
-import { fetchIncidentPhoto, getAllIncidents, setIncident } from '../../services/accountApi';
+import { fetchIncidentPhoto, getAllIncidents, setIncident, deleteIncident } from '../../services/accountApi';
 import { timeAgo } from '../../services/geo';
 import { colors, fonts } from '../../theme';
 
@@ -24,6 +24,13 @@ export default function AdminIncidents() {
     setBusy(true);
     setActionError('');
     try { await setIncident(id, action); await reload(); } catch (e) { setActionError(errorText(e)); }
+    setBusy(false);
+  };
+
+  const remove = async (id) => {
+    setBusy(true);
+    setActionError('');
+    try { await deleteIncident(id); await reload(); } catch (e) { setActionError(errorText(e)); }
     setBusy(false);
   };
 
@@ -62,6 +69,7 @@ export default function AdminIncidents() {
               {i.status === 'REPORTED' && <SmallButton label="Verify" color={colors.LOW} disabled={busy} onPress={() => act(i.id, 'verify')} />}
               {i.status === 'REPORTED' && <SmallButton label="Reject" color={colors.HIGH} disabled={busy} onPress={() => setConfirm({ id: i.id, kind: i.type.replace('_', ' ').toLowerCase() })} />}
               {(i.status === 'REPORTED' || i.status === 'VERIFIED') && <SmallButton label="Resolve" outline disabled={busy} onPress={() => act(i.id, 'resolve')} />}
+              <SmallButton label="Delete" color="#DC2626" disabled={busy} onPress={() => remove(i.id)} />
             </View>
           </Card>
         ))}
