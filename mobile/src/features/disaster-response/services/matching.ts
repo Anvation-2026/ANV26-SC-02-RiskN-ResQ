@@ -136,6 +136,9 @@ export function findBestVolunteerMatch(
     volunteer: {
       id: bestMatch.volunteer.id,
       name: bestMatch.volunteer.name,
+      latitude: bestMatch.volunteer.latitude,
+      longitude: bestMatch.volunteer.longitude,
+      phone: bestMatch.volunteer.phone,
     },
     resource: bestMatch.volunteer.resource,
     distanceKm: bestMatch.distanceKm,

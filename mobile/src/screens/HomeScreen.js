@@ -4,6 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Feather from '@expo/vector-icons/Feather';
 import Header from '../components/Header';
 import RiskCard from '../components/RiskCard';
+import AlertCard from '../components/AlertCard';
 import ActionButton from '../components/ActionButton';
 import ConnectionBanner from '../components/ConnectionBanner';
 import { useData } from '../context/DataContext';
@@ -26,8 +27,9 @@ const Row = ({ label, value, color }) => (
 
 export default function HomeScreen({ navigate }) {
   const insets = useSafeAreaInsets();
-  const { risk, blocked, source } = useData();
+  const { risk, alerts, blocked, source } = useData();
   const [title, body] = risk ? TEXT[risk.level] || TEXT.LOW : ['', ''];
+  const topAlert = alerts && alerts.length > 0 ? alerts[0] : null;
 
   return (
     <View style={styles.container}>
@@ -54,7 +56,13 @@ export default function HomeScreen({ navigate }) {
         <ConnectionBanner />
         <RiskCard risk={risk} />
 
-        {risk && (
+        {topAlert ? (
+          <AlertCard
+            alert={topAlert}
+            road={blocked.length ? blocked.map((r) => r.name).join(', ') : undefined}
+            onViewRoute={() => navigate('Map')}
+          />
+        ) : risk && risk.level !== 'LOW' ? (
           <View style={[styles.status, { borderLeftColor: riskColor(risk.level) }]}>
             <View style={styles.statusHeader}>
               <Feather
@@ -67,33 +75,37 @@ export default function HomeScreen({ navigate }) {
             </View>
             <Text style={styles.statusBody}>{body}</Text>
           </View>
-        )}
+        ) : null}
 
-        <View style={styles.grid}>
-          <ActionButton
-            iconName="map"
-            label="Live Map"
-            color={colors.primary}
-            onPress={() => navigate('Map')}
-          />
-          <ActionButton
-            iconName="navigation"
-            label="Alternative Route"
-            color="#0284C7"
-            onPress={() => navigate('Map')}
-          />
-          <ActionButton
-            iconName="alert-triangle"
-            label="Report Incident"
-            color="#D97706"
-            onPress={() => navigate('Report')}
-          />
-          <ActionButton
-            iconName="life-buoy"
-            label="Request Help"
-            color="#DC2626"
-            onPress={() => navigate('Help')}
-          />
+        <View style={styles.gridContainer}>
+          <View style={styles.gridRow}>
+            <ActionButton
+              iconName="map"
+              label="Live Map"
+              color={colors.primary}
+              onPress={() => navigate('Map')}
+            />
+            <ActionButton
+              iconName="navigation"
+              label="Alternative Route"
+              color="#0284C7"
+              onPress={() => navigate('Map')}
+            />
+          </View>
+          <View style={styles.gridRow}>
+            <ActionButton
+              iconName="alert-triangle"
+              label="Report Incident"
+              color="#D97706"
+              onPress={() => navigate('Report')}
+            />
+            <ActionButton
+              iconName="life-buoy"
+              label="Request Help"
+              color="#DC2626"
+              onPress={() => navigate('Help')}
+            />
+          </View>
         </View>
 
         <View style={styles.info}>
@@ -173,11 +185,12 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     color: colors.text,
   },
-  grid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
+  gridContainer: {
     gap: 10,
-    justifyContent: 'space-between',
+  },
+  gridRow: {
+    flexDirection: 'row',
+    gap: 10,
   },
   info: {
     backgroundColor: colors.card,

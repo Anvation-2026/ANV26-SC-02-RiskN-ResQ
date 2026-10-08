@@ -33,25 +33,26 @@ export function MapLegend({ items }) {
     { label: 'Recommended', color: colors.route, type: 'line' },
   ];
 
-  const scenarioItems = [
-    { label: 'High Risk', color: colors.HIGH, type: 'dot' },
-    { label: 'Blocked', color: colors.HIGH, type: 'dashed' },
-    { label: 'Location', color: colors.primary, type: 'dot' },
-    { label: 'Recommended', color: colors.route, type: 'line' },
-    { label: 'Resource', color: '#0F766E', type: 'dot' },
-  ];
-
-  const chips = items
-    ? items.map(([emoji, label]) => {
-        let type = 'dot';
-        let color = colors.primary;
-        if (label.includes('Risk')) { color = colors.HIGH; type = 'dot'; }
-        else if (label.includes('Blocked')) { color = colors.HIGH; type = 'dashed'; }
-        else if (label.includes('Route') || label.includes('Recommended')) { color = colors.route; type = 'line'; }
-        else if (label.includes('Resource')) { color = '#0F766E'; type = 'dot'; }
-        return { label, color, type };
-      })
-    : defaultItems;
+  const chips = useMemo(() => {
+    if (!items || !Array.isArray(items)) return defaultItems;
+    return items.map((item) => {
+      let label = '';
+      if (Array.isArray(item)) {
+        label = String(item[1] || item[0] || '');
+      } else if (item && typeof item === 'object') {
+        label = String(item.label || item.name || '');
+      } else {
+        label = String(item || '');
+      }
+      let type = 'dot';
+      let color = colors.primary;
+      if (label.includes('Risk')) { color = colors.HIGH; type = 'dot'; }
+      else if (label.includes('Blocked')) { color = colors.HIGH; type = 'dashed'; }
+      else if (label.includes('Route') || label.includes('Recommended')) { color = colors.route; type = 'line'; }
+      else if (label.includes('Resource')) { color = '#0F766E'; type = 'dot'; }
+      return { label, color, type };
+    });
+  }, [items]);
 
   return (
     <View style={legendStyles.container}>
@@ -118,6 +119,33 @@ const legendStyles = StyleSheet.create({
   },
 });
 
+export function normalizeCoord(c) {
+  if (!c) return null;
+  let lat, lng;
+  if (Array.isArray(c)) {
+    lat = Number(c[0]);
+    lng = Number(c[1]);
+  } else if (typeof c === 'object') {
+    lat = Number(c.latitude ?? c.lat);
+    lng = Number(c.longitude ?? c.lng ?? c.lon);
+  }
+  if (
+    typeof lat === 'number' &&
+    typeof lng === 'number' &&
+    !isNaN(lat) &&
+    !isNaN(lng) &&
+    isFinite(lat) &&
+    isFinite(lng) &&
+    lat >= -90 &&
+    lat <= 90 &&
+    lng >= -180 &&
+    lng <= 180
+  ) {
+    return { latitude: lat, longitude: lng };
+  }
+  return null;
+}
+
 export default function MapView({
   risk,
   roads = [],
@@ -134,16 +162,25 @@ export default function MapView({
   const mapRef = useRef(null);
   const me = user || USER;
   const level = risk ? risk.level : 'LOW';
-  const zoneCenter = ZONES[risk?.zone] || USER;
+  const zoneCenter = (risk && ZONES[risk.zone]) || USER;
 
-  const zoneList = useMemo(() => {
-    if (zones) return zones;
-    const r = ZONE_RADIUS_KM[level] || 0.8;
-    return [{ latitude: zoneCenter.latitude, longitude: zoneCenter.longitude, radiusKm: r, level }];
-  }, [zones, level, zoneCenter.latitude, zoneCenter.longitude]);
+  const validZones = useMemo(() => {
+    const list = zones || [
+      { latitude: zoneCenter.latitude, longitude: zoneCenter.longitude, radiusKm: ZONE_RADIUS_KM[level] || 0.8, level }
+    ];
+    if (!Array.isArray(list)) return [];
+    return list
+      .map((z) => {
+        if (!z) return null;
+        const pt = normalizeCoord(z);
+        if (!pt || !z.radiusKm || z.radiusKm <= 0) return null;
+        return { ...pt, radiusKm: z.radiusKm, level: z.level || 'LOW' };
+      })
+      .filter(Boolean);
+  }, [zones, level, zoneCenter]);
 
-  const blockedIds = useMemo(() => new Set(blocked.map((r) => r.id)), [blocked]);
-  const altId = alternative ? alternative.road.id : null;
+  const blockedIds = useMemo(() => new Set((blocked || []).map((r) => r && r.id).filter(Boolean)), [blocked]);
+  const altId = alternative && alternative.road ? alternative.road.id : null;
 
   // Zoom control handlers
   const handleZoom = (inFactor) => {
@@ -160,21 +197,83 @@ export default function MapView({
 
   const handleRecenter = () => {
     if (!mapRef.current) return;
+    const pt = normalizeCoord(me) || DEFAULT_REGION;
     mapRef.current.animateToRegion({
-      latitude: me.latitude,
-      longitude: me.longitude,
+      latitude: pt.latitude,
+      longitude: pt.longitude,
       latitudeDelta: 0.035,
       longitudeDelta: 0.035,
     }, 400);
   };
 
-  // Build route polyline coordinates
+  // Build route polyline coordinates safely
   const activeRouteCoords = useMemo(() => {
-    if (routeLine && routeLine.length >= 2) {
-      return routeLine.map((c) => ({ latitude: c[0], longitude: c[1] }));
-    }
-    return null;
+    if (!routeLine || !Array.isArray(routeLine)) return null;
+    const pts = routeLine.map(normalizeCoord).filter(Boolean);
+    return pts.length >= 2 ? pts : null;
   }, [routeLine]);
+
+  // Fit camera when active route updates
+  useEffect(() => {
+    if (!mapRef.current || !activeRouteCoords || activeRouteCoords.length < 2) return;
+    try {
+      mapRef.current.fitToCoordinates(activeRouteCoords, {
+        edgePadding: { top: 45, right: 45, bottom: 45, left: 45 },
+        animated: true,
+      });
+    } catch (e) {
+      /* camera fit safety */
+    }
+  }, [activeRouteCoords]);
+
+  // Process roads safely
+  const validRoads = useMemo(() => {
+    if (!Array.isArray(roads)) return [];
+    return roads
+      .map((road, idx) => {
+        if (!road || !Array.isArray(road.coordinates)) return null;
+        const pts = road.coordinates.map(normalizeCoord).filter(Boolean);
+        if (pts.length < 2) return null;
+        const midIdx = Math.floor(pts.length / 2);
+        return {
+          id: road.id || `road-${idx}`,
+          name: road.name || 'Corridor',
+          status: road.status || 'OPEN',
+          pts,
+          midCoord: pts[midIdx],
+        };
+      })
+      .filter(Boolean);
+  }, [roads]);
+
+  // Process markers safely
+  const validMarkers = useMemo(() => {
+    if (!Array.isArray(markers)) return [];
+    return markers
+      .map((m) => {
+        if (!m) return null;
+        const pt = normalizeCoord(m);
+        if (!pt) return null;
+        return { ...m, ...pt };
+      })
+      .filter(Boolean);
+  }, [markers]);
+
+  // Process incidents safely
+  const validIncidents = useMemo(() => {
+    if (!Array.isArray(incidents)) return [];
+    return incidents
+      .slice(0, 8)
+      .map((inc) => {
+        if (!inc) return null;
+        const pt = normalizeCoord(inc);
+        if (!pt) return null;
+        return { ...inc, ...pt };
+      })
+      .filter(Boolean);
+  }, [incidents]);
+
+  const userCoord = useMemo(() => normalizeCoord(me) || DEFAULT_REGION, [me]);
 
   return (
     <View style={[styles.container, { height }]}>
@@ -189,8 +288,7 @@ export default function MapView({
         toolbarEnabled={false}
       >
         {/* 1. FLOOD RISK ZONES (TRANSPARENT CIRCLES) */}
-        {zoneList.map((z, idx) => {
-          if (!z.radiusKm || z.radiusKm <= 0) return null;
+        {validZones.map((z, idx) => {
           const isCritical = z.level === 'CRITICAL' || z.level === 'HIGH';
           const isMedium = z.level === 'MEDIUM' || z.level === 'MODERATE';
           const fillColor = isCritical
@@ -218,17 +316,15 @@ export default function MapView({
         })}
 
         {/* 2. ROAD NETWORK POLYLINES */}
-        {roads.map((road, idx) => {
-          if (!road.coordinates || road.coordinates.length < 2) return null;
-          const pts = road.coordinates.map((c) => ({ latitude: c[0], longitude: c[1] }));
+        {validRoads.map((road) => {
           const isBlocked = blockedIds.has(road.id) || road.status === 'BLOCKED';
           const isLiveAlternative = !activeRouteCoords && altId === road.id;
 
           if (isBlocked) {
             return (
-              <React.Fragment key={`road-${road.id || idx}`}>
+              <React.Fragment key={`road-${road.id}`}>
                 <RNPolyline
-                  coordinates={pts}
+                  coordinates={road.pts}
                   strokeColor="#DC2626"
                   strokeWidth={5}
                   lineDashPattern={[8, 5]}
@@ -240,15 +336,15 @@ export default function MapView({
 
           if (isLiveAlternative) {
             return (
-              <React.Fragment key={`road-${road.id || idx}`}>
+              <React.Fragment key={`road-${road.id}`}>
                 <RNPolyline
-                  coordinates={pts}
+                  coordinates={road.pts}
                   strokeColor="#FFFFFF"
                   strokeWidth={8}
                   zIndex={5}
                 />
                 <RNPolyline
-                  coordinates={pts}
+                  coordinates={road.pts}
                   strokeColor="#1565FF"
                   strokeWidth={5}
                   zIndex={6}
@@ -259,8 +355,8 @@ export default function MapView({
 
           return (
             <RNPolyline
-              key={`road-${road.id || idx}`}
-              coordinates={pts}
+              key={`road-${road.id}`}
+              coordinates={road.pts}
               strokeColor="#94A3B8"
               strokeWidth={3.5}
               zIndex={2}
@@ -287,29 +383,24 @@ export default function MapView({
         )}
 
         {/* 4. BLOCKED ROAD BADGE MARKERS */}
-        {roads
-          .filter((r) => blockedIds.has(r.id) || r.status === 'BLOCKED')
-          .map((road, idx) => {
-            if (!road.coordinates || road.coordinates.length < 2) return null;
-            const midIdx = Math.floor(road.coordinates.length / 2);
-            const midCoord = road.coordinates[midIdx];
-            return (
-              <RNMarker
-                key={`blocked-marker-${road.id || idx}`}
-                coordinate={{ latitude: midCoord[0], longitude: midCoord[1] }}
-                anchor={{ x: 0.5, y: 0.5 }}
-                zIndex={15}
-              >
-                <View style={styles.blockedBadge}>
-                  <Text style={styles.blockedBadgeText}>BLOCKED</Text>
-                </View>
-              </RNMarker>
-            );
-          })}
+        {validRoads
+          .filter((r) => (blockedIds.has(r.id) || r.status === 'BLOCKED') && r.midCoord)
+          .map((road) => (
+            <RNMarker
+              key={`blocked-marker-${road.id}`}
+              coordinate={road.midCoord}
+              anchor={{ x: 0.5, y: 0.5 }}
+              zIndex={15}
+            >
+              <View style={styles.blockedBadge}>
+                <Text style={styles.blockedBadgeText}>BLOCKED</Text>
+              </View>
+            </RNMarker>
+          ))}
 
         {/* 5. USER LOCATION PIN */}
         <RNMarker
-          coordinate={{ latitude: me.latitude, longitude: me.longitude }}
+          coordinate={userCoord}
           anchor={{ x: 0.5, y: 0.5 }}
           zIndex={20}
         >
@@ -323,19 +414,19 @@ export default function MapView({
         </RNMarker>
 
         {/* 6. SCENARIO DESTINATION & VOLUNTEER MARKERS */}
-        {markers.map((m) => {
+        {validMarkers.map((m) => {
           const isDest = m.id === 'dest';
           return (
             <RNMarker
               key={m.id}
               coordinate={{ latitude: m.latitude, longitude: m.longitude }}
               anchor={{ x: 0.5, y: 0.5 }}
-              zIndex={isDest ? 14 : 12}
+              zIndex={isDest ? 14 : m.highlight ? 18 : 12}
             >
               <View style={[styles.customPin, m.highlight && styles.highlightedPin]}>
                 <View style={[styles.pinBadge, { backgroundColor: m.color || colors.navy }]}>
                   <Text style={styles.pinBadgeText}>
-                    {isDest ? 'RELIEF CTR' : m.label || 'RESOURCE'}
+                    {m.label || (isDest ? 'RELIEF CTR' : 'RESOURCE')}
                   </Text>
                 </View>
               </View>
@@ -344,7 +435,7 @@ export default function MapView({
         })}
 
         {/* 7. LIVE INCIDENTS */}
-        {incidents.slice(0, 8).map((inc) => (
+        {validIncidents.map((inc) => (
           <RNMarker
             key={`inc-${inc.id}`}
             coordinate={{ latitude: inc.latitude, longitude: inc.longitude }}

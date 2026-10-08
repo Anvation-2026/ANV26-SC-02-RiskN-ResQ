@@ -27,6 +27,8 @@ export function ResponseProvider({ children }) {
   const [route, setRoute] = useState(null);
   const [resource, setResource] = useState('Medicine');
   const [match, setMatch] = useState(null);
+  const [destinationNode, setDestinationNode] = useState(DESTINATION_NODE);
+  const [destinationVolunteer, setDestinationVolunteer] = useState(null);
 
   useEffect(() => {
     if (USE_DEVICE_LOCATION) getCurrentUserLocation().then(setUserLocation);
@@ -46,16 +48,37 @@ export function ResponseProvider({ children }) {
 
   const assessment = useMemo(() => isInsideRiskZone(userLocation, PRIMARY_DEMO_RISK_ZONE), [userLocation]);
 
-  const compute = (currentRoads) => findRecommendedRoute(ORIGIN_NODE, DESTINATION_NODE, currentRoads, INITIAL_ROAD_GRAPH);
+  const compute = useCallback(
+    (currentRoads, targetNode = destinationNode, volunteer = destinationVolunteer) => {
+      const res = findRecommendedRoute(ORIGIN_NODE, targetNode, currentRoads, INITIAL_ROAD_GRAPH);
+      if (res && res.success && volunteer && res.coordinates.length > 0) {
+        // Ensure terminal coordinate strictly connects to volunteer pin
+        const coords = [...res.coordinates];
+        coords[coords.length - 1] = {
+          latitude: volunteer.latitude,
+          longitude: volunteer.longitude,
+        };
+        return { ...res, coordinates: coords };
+      }
+      return res;
+    },
+    [destinationNode, destinationVolunteer]
+  );
 
-  const requestRoute = useCallback(() => setRoute(compute(roads)), [roads]);
+  const requestRoute = useCallback(() => {
+    setRoute(compute(roads, destinationNode, destinationVolunteer));
+  }, [roads, destinationNode, destinationVolunteer, compute]);
 
-  // keep an already-requested route in step with road changes (local or from the backend)
-  useEffect(() => {
-    setRoute((r) => (r ? compute(roads) : r));
-  }, [roads]);
-
-  const applyRoads = useCallback((next) => setRoads(next), []);
+  // Keep an already-requested route in sync whenever road state changes.
+  const applyRoads = useCallback(
+    (next) => {
+      setRoads(next);
+      if (route) {
+        setRoute(compute(next, destinationNode, destinationVolunteer));
+      }
+    },
+    [route, destinationNode, destinationVolunteer, compute]
+  );
 
   const block = useCallback(() => {
     applyRoads(blockRoad(DEMO_ROAD_ID, roads));
@@ -69,9 +92,24 @@ export function ResponseProvider({ children }) {
 
   const requestResource = useCallback(
     (name = resource, priority = 'HIGH') => {
-      setMatch(findBestVolunteerMatch({ resource: name, priority, latitude: userLocation.latitude, longitude: userLocation.longitude }, MOCK_VOLUNTEERS));
+      const matchResult = findBestVolunteerMatch(
+        { resource: name, priority, latitude: userLocation.latitude, longitude: userLocation.longitude },
+        MOCK_VOLUNTEERS
+      );
+      setMatch(matchResult);
+      if (matchResult && matchResult.matched && matchResult.volunteer) {
+        const vol = matchResult.volunteer;
+        setDestinationVolunteer(vol);
+        const target = vol.id === 'VOL001' ? 'D' :
+                       vol.id === 'VOL002' ? 'C' :
+                       vol.id === 'VOL003' ? 'E' :
+                       vol.id === 'VOL005' ? 'F' : 'D';
+        setDestinationNode(target);
+        setRoute(compute(roads, target, vol));
+      }
+      return matchResult;
     },
-    [resource, userLocation]
+    [resource, userLocation, roads, compute]
   );
 
   const reset = useCallback(() => {
@@ -79,6 +117,8 @@ export function ResponseProvider({ children }) {
     setRoute(null);
     setMatch(null);
     setResource('Medicine');
+    setDestinationNode(DESTINATION_NODE);
+    setDestinationVolunteer(null);
     syncRoadA(false).then(refresh);
   }, [refresh]);
 
@@ -86,6 +126,8 @@ export function ResponseProvider({ children }) {
     userLocation, roads, route, match, resource, setResource, assessment,
     zones: MOCK_RISK_ZONES, graph: INITIAL_ROAD_GRAPH, volunteers: MOCK_VOLUNTEERS,
     roadDemo: roads.find((r) => r.id === DEMO_ROAD_ID),
+    destinationNode, destinationVolunteer,
+    destinationLabel: destinationVolunteer ? `${destinationVolunteer.name} (${destinationVolunteer.resource})` : 'Relief Station Alpha',
     requestRoute, block, unblock, requestResource, reset,
   };
   return <ResponseContext.Provider value={value}>{children}</ResponseContext.Provider>;

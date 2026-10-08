@@ -109,6 +109,9 @@ export type MatchResult =
       volunteer: {
         id: string;
         name: string;
+        latitude?: number;
+        longitude?: number;
+        phone?: string;
       };
       resource: string;
       distanceKm: number;

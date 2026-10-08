@@ -10,8 +10,8 @@ export const MOCK_VOLUNTEERS: Volunteer[] = [
     id: 'VOL001',
     name: 'Arjun',
     resource: 'Medicine',
-    latitude: 12.9710,
-    longitude: 77.5935,
+    latitude: 12.9765,
+    longitude: 77.6050, // Corresponds to Node D (Relief Station Alpha)
     availability: 'AVAILABLE',
     phone: '+91 98450 12345',
   },
@@ -20,7 +20,7 @@ export const MOCK_VOLUNTEERS: Volunteer[] = [
     name: 'Rahul',
     resource: 'Food',
     latitude: 12.9750,
-    longitude: 77.6000,
+    longitude: 77.6015, // Corresponds to Node C (Church Street Intersection)
     availability: 'AVAILABLE',
     phone: '+91 98450 23456',
   },
@@ -28,8 +28,8 @@ export const MOCK_VOLUNTEERS: Volunteer[] = [
     id: 'VOL003',
     name: 'Priya',
     resource: 'First Aid',
-    latitude: 12.9690,
-    longitude: 77.5920,
+    latitude: 12.9675,
+    longitude: 77.5995, // Corresponds to Node E (Brigade South Waypoint)
     availability: 'AVAILABLE',
     phone: '+91 98450 34567',
   },
@@ -46,8 +46,8 @@ export const MOCK_VOLUNTEERS: Volunteer[] = [
     id: 'VOL005',
     name: 'Kiran',
     resource: 'Water',
-    latitude: 12.9730,
-    longitude: 77.5960,
+    latitude: 12.9700,
+    longitude: 77.6065, // Corresponds to Node F (Richmond Outer Bypass)
     availability: 'AVAILABLE',
     phone: '+91 98450 56789',
   },

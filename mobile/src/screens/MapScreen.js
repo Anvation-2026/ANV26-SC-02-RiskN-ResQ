@@ -13,6 +13,7 @@ import Header from '../components/Header';
 import MapView, { MapLegend } from '../components/MapView';
 import ConnectionBanner from '../components/ConnectionBanner';
 import ResponsePanel from '../components/ResponsePanel';
+import ErrorBoundary from '../components/ErrorBoundary';
 import { useResponse } from '../context/ResponseContext';
 import { useData } from '../context/DataContext';
 import { colors, radius, shadow } from '../theme';
@@ -32,54 +33,76 @@ export default function MapScreen() {
   // Dominant map height: 50-54% of screen height
   const mapHeight = Math.max(340, Math.min(480, Math.round(screenHeight * 0.50)));
 
-  // Disaster-response scenario translated into MapView's props
+  // Disaster-response scenario translated safely into MapView's props
   const scenario = useMemo(() => {
-    const status = new Map(R.roads.map((r) => [r.id, r]));
-    const edges = R.graph.edges.map((e, i) => {
-      const a = R.graph.nodes[e.from];
-      const b = R.graph.nodes[e.to];
-      const road = status.get(e.roadId);
-      return {
-        id: `${e.roadId}-${i}`,
-        name: road ? road.name : e.roadId,
-        status: road ? road.status : 'OPEN',
-        coordinates: [
-          [a.latitude, a.longitude],
-          [b.latitude, b.longitude],
-        ],
-      };
-    });
-    const dest = R.graph.nodes.D;
-    const matchedId = R.match && R.match.matched ? R.match.volunteer.id : null;
+    if (!R || !R.graph || !R.graph.edges || !R.graph.nodes) {
+      return { edges: [], blockedEdges: [], routeLine: undefined, markers: [] };
+    }
+    const status = new Map((R.roads || []).map((r) => [r && r.id, r]));
+    const edges = (R.graph.edges || [])
+      .map((e, i) => {
+        const a = R.graph.nodes[e.from];
+        const b = R.graph.nodes[e.to];
+        if (!a || !b) return null;
+        const road = status.get(e.roadId);
+        return {
+          id: `${e.roadId}-${i}`,
+          name: road ? road.name : e.roadId,
+          status: road ? road.status : 'OPEN',
+          coordinates: [
+            [a.latitude, a.longitude],
+            [b.latitude, b.longitude],
+          ],
+        };
+      })
+      .filter(Boolean);
+
+    const dest = (R.destinationNode && R.graph.nodes[R.destinationNode])
+      || R.graph.nodes.D;
+    const matchedId = R.match && R.match.matched && R.match.volunteer ? R.match.volunteer.id : null;
+
+    const markers = [];
+    if (dest && typeof dest.latitude === 'number' && typeof dest.longitude === 'number') {
+      const isOverlappingMatched = matchedId && R.match?.volunteer?.latitude === dest.latitude && R.match?.volunteer?.longitude === dest.longitude;
+      if (!isOverlappingMatched) {
+        markers.push({
+          id: 'dest',
+          latitude: dest.latitude,
+          longitude: dest.longitude,
+          label: R.destinationLabel || 'Relief Station Alpha',
+          color: colors.navy,
+        });
+      }
+    }
+
+    if (Array.isArray(R.volunteers)) {
+      R.volunteers.forEach((v) => {
+        if (v && typeof v.latitude === 'number' && typeof v.longitude === 'number') {
+          const isMatched = v.id === matchedId;
+          markers.push({
+            id: v.id,
+            latitude: v.latitude,
+            longitude: v.longitude,
+            highlight: isMatched,
+            label: isMatched ? `★ ${v.name} · ${v.resource}` : `${v.name} · ${v.resource}`,
+            color: isMatched ? colors.route : v.availability === 'AVAILABLE' ? colors.LOW : '#94A3B8',
+          });
+        }
+      });
+    }
 
     return {
       edges,
       blockedEdges: edges.filter((e) => e.status === 'BLOCKED'),
       routeLine:
-        R.route && R.route.success
-          ? R.route.coordinates.map((c) => [c.latitude, c.longitude])
+        R.route && R.route.success && Array.isArray(R.route.coordinates)
+          ? R.route.coordinates
           : undefined,
-      markers: [
-        {
-          id: 'dest',
-          latitude: dest.latitude,
-          longitude: dest.longitude,
-          label: 'Relief Station',
-          color: colors.navy,
-        },
-        ...R.volunteers.map((v) => ({
-          id: v.id,
-          latitude: v.latitude,
-          longitude: v.longitude,
-          highlight: v.id === matchedId,
-          label: `${v.name} · ${v.resource}`,
-          color: v.availability === 'AVAILABLE' ? colors.LOW : '#94A3B8',
-        })),
-      ],
+      markers,
     };
-  }, [R.roads, R.route, R.match, R.graph, R.volunteers]);
+  }, [R]);
 
-  const names = blocked.map((r) => r.name).join(', ');
+  const names = (blocked || []).map((r) => r.name).join(', ');
 
   return (
     <View style={styles.root}>
@@ -116,46 +139,50 @@ export default function MapScreen() {
 
         <ConnectionBanner />
 
-        {/* LARGE DOMINANT REAL INTERACTIVE MAP */}
-        <View style={styles.mapWrapper}>
-          {mode === 'response' ? (
-            <MapView
-              risk={risk}
-              roads={scenario.edges}
-              blocked={scenario.blockedEdges}
-              alternative={null}
-              zones={R.zones.map((z) => ({
-                latitude: z.latitude,
-                longitude: z.longitude,
-                radiusKm: z.radiusKm,
-                level: z.riskLevel,
-              }))}
-              height={mapHeight}
-              routeLine={scenario.routeLine}
-              markers={scenario.markers}
-              user={R.userLocation}
-              labelBlockedOnly
-            />
-          ) : (
-            <MapView
-              risk={risk}
-              roads={roads}
-              blocked={blocked}
-              alternative={alternative}
-              incidents={incidents}
-              height={mapHeight}
-            />
-          )}
-        </View>
+        {/* LARGE DOMINANT REAL INTERACTIVE MAP WITH ERROR BOUNDARY */}
+        <ErrorBoundary fallbackTitle="Map View Unavailable">
+          <View style={styles.mapWrapper}>
+            {mode === 'response' ? (
+              <MapView
+                risk={risk}
+                roads={scenario.edges}
+                blocked={scenario.blockedEdges}
+                alternative={null}
+                zones={Array.isArray(R.zones) ? R.zones.map((z) => ({
+                  latitude: z.latitude,
+                  longitude: z.longitude,
+                  radiusKm: z.radiusKm,
+                  level: z.riskLevel,
+                })) : []}
+                height={mapHeight}
+                routeLine={scenario.routeLine}
+                markers={scenario.markers}
+                user={R.userLocation}
+                labelBlockedOnly
+              />
+            ) : (
+              <MapView
+                risk={risk}
+                roads={roads}
+                blocked={blocked}
+                alternative={alternative}
+                incidents={incidents}
+                height={mapHeight}
+              />
+            )}
+          </View>
+        </ErrorBoundary>
 
         {/* COMPACT MAP LEGEND */}
         <MapLegend />
 
         {/* BOTTOM SECTION / ROUTE STATUS */}
         {mode === 'response' ? (
-          <View style={styles.responseContainer}>
-            <ResponsePanel />
-          </View>
+          <ErrorBoundary fallbackTitle="Response Telemetry Unavailable">
+            <View style={styles.responseContainer}>
+              <ResponsePanel />
+            </View>
+          </ErrorBoundary>
         ) : (
           <View style={styles.routeCard}>
             <View style={styles.kickerRow}>
