@@ -1,10 +1,23 @@
 import json
 import os
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from config import DATABASE_URL
+
+try:  # PostgreSQL driver (psycopg 3). Only needed when DATABASE_URL points at PostgreSQL.
+    import psycopg
+except ImportError:  # pragma: no cover
+    psycopg = None
+
+# The database engine is chosen by DATABASE_URL: postgresql://... uses PostgreSQL, anything else uses a SQLite file.
+BACKEND = "postgres" if DATABASE_URL.lower().startswith(("postgres://", "postgresql://")) else "sqlite"
+_PG_SCHEMA = None  # tests only: run inside an isolated PostgreSQL schema
+
+# Every database error type the API should answer with a clean JSON 500.
+DB_ERRORS = (sqlite3.Error,) + ((psycopg.Error,) if psycopg else ())
 
 # Path resolution: allow RISKNRESQ_DB override (for test suites), fallback to DATABASE_URL or default
 DB_PATH = Path(os.environ.get("RISKNRESQ_DB", Path(__file__).parent / "resilienturban.db"))
@@ -200,7 +213,124 @@ def now_iso() -> str:
     return now()
 
 
-def conn() -> sqlite3.Connection:
+# ---------------------------------------------------------------------------------------------
+# PostgreSQL support. The application's SQL is written once (SQLite style, "?" placeholders); this thin layer
+# presents a PostgreSQL connection with the same small surface (execute, executemany, commit, rollback, close,
+# rows readable by name or by position, cursor.lastrowid) and translates the few dialect differences.
+# ---------------------------------------------------------------------------------------------
+
+class PgRow(dict):
+    """A row readable by column name (row["id"]) or by position (row[0]), like sqlite3.Row."""
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return list(self.values())[key]
+        return dict.__getitem__(self, key)
+
+
+def _pg_row_factory(cursor):
+    names = [d.name for d in cursor.description] if cursor.description else []
+    return lambda values: PgRow(zip(names, values))
+
+
+def _pg_sql(sql: str, with_params: bool) -> str:
+    return sql.replace("%", "%%").replace("?", "%s") if with_params else sql
+
+
+def _pg_ddl(sql: str) -> str:
+    """Translate the SQLite schema text to PostgreSQL."""
+    sql = sql.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
+    sql = re.sub(r"\bREAL\b", "DOUBLE PRECISION", sql)
+    sql = sql.replace("(datetime('now'))", "(to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'))")
+    return sql
+
+
+class PgCursor:
+    def __init__(self, cur, lastrowid=None):
+        self._cur = cur
+        self.lastrowid = lastrowid
+
+    def fetchone(self):
+        return self._cur.fetchone()
+
+    def fetchall(self):
+        return self._cur.fetchall()
+
+    def __iter__(self):
+        return iter(self._cur)
+
+    @property
+    def rowcount(self):
+        return self._cur.rowcount
+
+
+class PgConn:
+    def __init__(self, raw):
+        self._raw = raw
+
+    def execute(self, sql, params=()):
+        sql = sql.strip()
+        returning = bool(re.match(r"INSERT\s", sql, re.I)) and "RETURNING" not in sql.upper()
+        if returning:  # gives cursor.lastrowid like SQLite (every table has an id column)
+            sql += " RETURNING id"
+        cur = self._raw.cursor()
+        cur.execute(_pg_sql(sql, bool(params)), tuple(params) if params else None)
+        lastrowid = None
+        if returning:
+            row = cur.fetchone()
+            lastrowid = row["id"] if row else None
+        return PgCursor(cur, lastrowid)
+
+    def executemany(self, sql, seq):
+        cur = self._raw.cursor()
+        cur.executemany(_pg_sql(sql.strip(), True), [tuple(p) for p in seq])
+        return PgCursor(cur)
+
+    def executescript(self, script):
+        for stmt in script.split(";"):
+            if stmt.strip():
+                self._raw.execute(stmt)
+
+    def commit(self):
+        self._raw.commit()
+
+    def rollback(self):
+        self._raw.rollback()
+
+    def close(self):
+        self._raw.close()
+
+
+def _pg_connect() -> PgConn:
+    if psycopg is None:
+        raise RuntimeError("DATABASE_URL points at PostgreSQL but the 'psycopg' package is not installed "
+                           "(pip install -r requirements.txt).")
+    raw = psycopg.connect(DATABASE_URL, row_factory=_pg_row_factory, connect_timeout=10)
+    if _PG_SCHEMA:
+        raw.execute(f'SET search_path TO "{_PG_SCHEMA}"')
+    return PgConn(raw)
+
+
+def create_schema(name: str) -> None:
+    """Tests: make an empty, isolated PostgreSQL schema."""
+    with psycopg.connect(DATABASE_URL, autocommit=True) as raw:
+        raw.execute(f'CREATE SCHEMA "{name}"')
+
+
+def drop_schema(name: str) -> None:
+    with psycopg.connect(DATABASE_URL, autocommit=True) as raw:
+        raw.execute(f'DROP SCHEMA IF EXISTS "{name}" CASCADE')
+
+
+def table_exists(c, name: str) -> bool:
+    if BACKEND == "postgres":
+        return bool(c.execute("SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = ?", (name,)).fetchone())
+    return bool(c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone())
+
+
+def conn():
+    if BACKEND == "postgres":
+        return _pg_connect()
     c = sqlite3.connect(DB_PATH, timeout=10)
     c.row_factory = sqlite3.Row
     return c
@@ -224,13 +354,21 @@ def nearest_zone(lat: float, lng: float) -> str:
     return min(ZONES, key=lambda z: (ZONES[z][0] - lat) ** 2 + (ZONES[z][1] - lng) ** 2)
 
 
-def _migrate(c: sqlite3.Connection) -> None:
-    c.executescript(SCHEMA)
+def _columns(c, table: str) -> set:
+    if BACKEND == "postgres":
+        rows = c.execute("SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = ?", (table,)).fetchall()
+    else:
+        rows = c.execute(f"PRAGMA table_info({table})").fetchall()
+    return {r["name"] for r in rows}
+
+
+def _migrate(c) -> None:
+    c.executescript(_pg_ddl(SCHEMA) if BACKEND == "postgres" else SCHEMA)
     for table, cols in MIGRATIONS.items():
-        have = {r["name"] for r in c.execute(f"PRAGMA table_info({table})")}
+        have = _columns(c, table)
         for name, decl in cols:
             if name not in have:
-                c.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+                c.execute(f"ALTER TABLE {table} ADD COLUMN {name} {_pg_ddl(decl) if BACKEND == 'postgres' else decl}")
 
     # Clean up legacy demo accounts without credentials and normalize roles
     c.execute("DELETE FROM users WHERE email IS NULL AND password_hash IS NULL AND name IN ('Demo Citizen','Demo Admin')")
@@ -269,20 +407,28 @@ def reset_db() -> None:
         _migrate(c)
         for t in STATE_TABLES:
             c.execute(f"DELETE FROM {t}")
-        c.execute("DELETE FROM sqlite_sequence WHERE name IN (%s)" % ",".join("?" * len(STATE_TABLES)), STATE_TABLES)
+        if BACKEND == "postgres":  # restart the id counters, like clearing sqlite_sequence
+            for t in STATE_TABLES:
+                c.execute(f"ALTER SEQUENCE {t}_id_seq RESTART WITH 1")
+        else:
+            c.execute("DELETE FROM sqlite_sequence WHERE name IN (%s)" % ",".join("?" * len(STATE_TABLES)), STATE_TABLES)
         seed_state(c)
         seed_volunteers(c)
         c.execute("UPDATE volunteers SET available=1 WHERE status='ACTIVE'")
 
 
-def seed_state(c: sqlite3.Connection) -> None:
+def seed_state(c) -> None:
     """Initial demo state: LOW rainfall, all roads AVAILABLE, no alerts. Synthetic data, not live readings."""
     t = now()
     for z, (la, lo) in ZONES.items():
-        c.execute(
-            "INSERT OR REPLACE INTO environment_data(zone,latitude,longitude,rainfall,updated_at,data_source) VALUES(?,?,?,?,?,'DEMO_SEED')",
-            (z, la, lo, 5, t),
+        upsert = (
+            "INSERT INTO environment_data(zone,latitude,longitude,rainfall,updated_at,data_source) VALUES(?,?,?,?,?,'DEMO_SEED') "
+            "ON CONFLICT (zone) DO UPDATE SET latitude=EXCLUDED.latitude, longitude=EXCLUDED.longitude, "
+            "rainfall=EXCLUDED.rainfall, updated_at=EXCLUDED.updated_at, data_source=EXCLUDED.data_source"
+            if BACKEND == "postgres"
+            else "INSERT OR REPLACE INTO environment_data(zone,latitude,longitude,rainfall,updated_at,data_source) VALUES(?,?,?,?,?,'DEMO_SEED')"
         )
+        c.execute(upsert, (z, la, lo, 5, t))
     c.executemany(
         "INSERT INTO roads(name,coordinates,status) VALUES(?,?,'AVAILABLE')",
         [
@@ -298,7 +444,7 @@ def seed_state(c: sqlite3.Connection) -> None:
     )
 
 
-def seed_volunteers(c: sqlite3.Connection) -> None:
+def seed_volunteers(c) -> None:
     """Demo roster (no login). Real volunteer accounts are created by a Super Admin or self-registration."""
     if c.execute("SELECT COUNT(*) FROM volunteers").fetchone()[0] == 0:
         c.executemany(

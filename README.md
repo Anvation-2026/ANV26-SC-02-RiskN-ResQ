@@ -25,11 +25,11 @@ The app never claims a route is "safe". It says *"Recommended alternative route 
 │  mobile/ (Expo, RN)  │ ───────────────▶ │  backend/ (FastAPI)       │
 │  Home Map Report     │ ◀─────────────── │  Risk · Trust · Alerts    │
 │  Help Alerts         │   polls every 4s │  Roads · Simulation       │
-│  + mock-data fallback│                  │  SQLite (auto-seeded)     │
+│  + mock-data fallback│                  │  PostgreSQL (auto-seeded) │
 └──────────────────────┘                  └───────────────────────────┘
 ```
 
-- **Backend:** Python, FastAPI, SQLite, Pydantic. Deterministic rules, no ML, no auth.
+- **Backend:** Python, FastAPI, **PostgreSQL** (SQLite still works for quick local runs), Pydantic. Deterministic rules, no ML. Login with roles.
 - **Frontend:** React Native with Expo (JavaScript). If the backend is unreachable the app falls back to built-in demo data and shows *"Unable to connect to live data."*
 - **Map:** drawn from real road coordinates without a map SDK, so nothing extra to set up.
 
@@ -106,6 +106,36 @@ Blocking the demo road also blocks Road A on the backend (best effort), and the 
 cd mobile
 npx tsc --noEmit        # type check
 npx jest --runInBand    # 16 tests
+```
+
+## Database (PostgreSQL)
+
+The backend uses **PostgreSQL** when `DATABASE_URL` points at it, and a local SQLite file when it does not (quick demos, tests). The tables are created and the demo data seeded automatically on first start.
+
+```bash
+# 1. create the database (PostgreSQL must be running)
+createdb risknresq
+
+# 2. tell the backend about it, in backend/.env (git-ignored):
+#    DATABASE_URL=postgresql://<user>:<password>@localhost:5432/risknresq
+#    (on a Mac with Homebrew PostgreSQL the user is your login name and no password is needed)
+
+# 3. install the driver and start the backend
+cd backend && pip install -r requirements.txt
+python3 -m uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+Already have data in the old SQLite file? Copy it once into PostgreSQL (this empties the target tables first):
+
+```bash
+cd backend && DATABASE_URL=postgresql://<user>@localhost:5432/risknresq python scripts/migrate_sqlite_to_postgres.py
+```
+
+Tests run on a throw-away SQLite file by default. To run the same suite on PostgreSQL (each test gets its own temporary schema), create a test database first:
+
+```bash
+createdb risknresq_test
+RISKNRESQ_TEST_BACKEND=postgres DATABASE_URL=postgresql://<user>@localhost:5432/risknresq_test python -m pytest -q
 ```
 
 ## Running on a real phone (Expo Go)
@@ -192,7 +222,7 @@ Zones are `Zone A`, `Zone B`, `Zone C`; incidents are assigned to the nearest on
 - **Help types:** `MEDICINE`, `FOOD`, `WATER`, `FIRST_AID`, `EVACUATION` (also accepts "First Aid" or "Evacuation Assistance"); priorities `LOW`, `MEDIUM`, `HIGH`, `CRITICAL`.
 - **Alerts:** one engine alert per zone (created or upgraded at HIGH/CRITICAL, deactivated when risk drops). Each has `reason`, `risk_score`, `affected_road` (blocked roads in that zone), `created_at` and `updated_at`. Manual alerts from `POST /alerts` are never cleared by the engine.
 - **Data transparency:** risk responses carry `data_source` (`DEMO_SEED` or `SIMULATED`) and a notice that this is demo data, not a real-time forecast or official warning.
-- **Config:** set `RISKNRESQ_DB` to use a different SQLite file. Older database files are upgraded automatically.
+- **Config:** the database is chosen by `DATABASE_URL` (see *Database* below). Older database files are upgraded automatically.
 
 ### Backend tests
 
@@ -209,7 +239,8 @@ python -m pytest -q        # 147 tests (API, authentication, photo upload), each
 backend/
   main.py          FastAPI routes
   engine.py        risk, trust score, alert logic
-  db.py            SQLite schema, migrations, seed data
+  db.py            schema, migrations, seed data; PostgreSQL and SQLite
+  scripts/         migrate_sqlite_to_postgres.py (one-time data copy)
   tests/           pytest API, auth and photo tests
   uploads/         incident photos (git-ignored)
 mobile/

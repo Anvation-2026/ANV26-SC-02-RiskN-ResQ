@@ -159,7 +159,7 @@ def test_incident_is_stored_and_listed(client):
     assert got["id"] == body["id"]
     assert body["id"] in [i["id"] for i in client.get("/incidents").json()]
     # really persisted in SQLite
-    with sqlite3.connect(db.DB_PATH) as raw:
+    with db.session() as raw:  # really persisted in the database
         assert raw.execute("SELECT COUNT(*) FROM incidents WHERE id=?", (body["id"],)).fetchone()[0] == 1
 
 
@@ -274,6 +274,8 @@ def test_database_failure_returns_json_500_and_server_survives(client, monkeypat
 
 
 def test_old_database_files_are_upgraded(tmp_path, monkeypatch):
+    if db.BACKEND == "postgres":
+        pytest.skip("upgrade of old SQLite files only applies to SQLite")
     path = tmp_path / "old.db"
     with sqlite3.connect(path) as raw:  # schema from the first release
         raw.execute("CREATE TABLE alerts (id INTEGER PRIMARY KEY AUTOINCREMENT, severity TEXT NOT NULL, message TEXT NOT NULL,"

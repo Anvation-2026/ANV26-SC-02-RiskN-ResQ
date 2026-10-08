@@ -4,7 +4,6 @@ import math
 import os
 import re
 import secrets
-import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import List, Literal, Optional, Tuple, Union
@@ -92,10 +91,13 @@ async def validation_error(_: Request, exc: RequestValidationError):
     return JSONResponse(status_code=422, content={"detail": f"Invalid request: {msg}", "errors": errors})
 
 
-@app.exception_handler(sqlite3.Error)
-async def database_error(_: Request, exc: sqlite3.Error):
+async def database_error(_: Request, exc: Exception):
     logger.exception("database error")
     return JSONResponse(status_code=500, content={"detail": "Database error. Nothing was saved; please retry.", "error": "database"})
+
+
+for _db_error in db.DB_ERRORS:  # SQLite and PostgreSQL errors both become a clean JSON 500
+    app.add_exception_handler(_db_error, database_error)
 
 
 # ---------- Helpers & Serializers ----------
@@ -194,7 +196,7 @@ def health():
         with db.session() as c:
             c.execute("SELECT 1").fetchone()
         return {"status": "ok", "database": "ok"}
-    except (sqlite3.Error, Exception):
+    except Exception:
         return JSONResponse(status_code=503, content={"status": "degraded", "database": "unavailable"})
 
 
@@ -1228,7 +1230,7 @@ def admin_summary(_: dict = Depends(auth.require_admin)):
     with db.session() as c:
         risks = [compute_risk(c, z) for z in db.ZONES]
         n = lambda q: c.execute(q).fetchone()[0]  # noqa: E731
-        roads_blocked = n("SELECT COUNT(*) FROM roads WHERE status='BLOCKED'") if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='roads'").fetchone() else 0
+        roads_blocked = n("SELECT COUNT(*) FROM roads WHERE status='BLOCKED'") if db.table_exists(c, 'roads') else 0
         return {
             "risk": max(risks, key=lambda r: r["risk_score"]),
             "active_alerts": n("SELECT COUNT(*) FROM alerts WHERE active=1"),
@@ -1291,7 +1293,7 @@ def reset(_: dict = Depends(auth.require_admin)):
     with db.session() as c:
         risks = refresh_all(c)
         alerts = c.execute("SELECT COUNT(*) FROM alerts WHERE active=1").fetchone()[0]
-        blocked = c.execute("SELECT COUNT(*) FROM roads WHERE status='BLOCKED'").fetchone()[0] if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='roads'").fetchone() else 0
+        blocked = c.execute("SELECT COUNT(*) FROM roads WHERE status='BLOCKED'").fetchone()[0] if db.table_exists(c, 'roads') else 0
     return {
         "status": "reset",
         "risk_level": max(risks, key=lambda r: r["risk_score"])["risk_level"],
