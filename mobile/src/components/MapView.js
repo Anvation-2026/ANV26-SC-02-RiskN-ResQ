@@ -14,23 +14,16 @@ import RNMapView, {
 } from 'react-native-maps';
 import Feather from '@expo/vector-icons/Feather';
 import { colors, radius, riskColor, shadow } from '../theme';
-import { USER, ZONES } from '../services/geo';
 
-const ZONE_RADIUS_KM = { LOW: 0, MEDIUM: 0.7, MODERATE: 0.7, HIGH: 1.2, CRITICAL: 1.8 };
-
-const DEFAULT_REGION = {
-  latitude: 12.9716,
-  longitude: 77.5946,
-  latitudeDelta: 0.045,
-  longitudeDelta: 0.045,
-};
+const ZONE_RADIUS_KM = { LOW: 0, MODERATE: 0.7, HIGH: 1.2, CRITICAL: 1.8 };
 
 export function MapLegend({ items }) {
   const defaultItems = [
-    { label: 'High Risk', color: colors.HIGH, type: 'dot' },
-    { label: 'Blocked', color: colors.HIGH, type: 'dashed' },
-    { label: 'Location', color: colors.primary, type: 'dot' },
-    { label: 'Recommended', color: colors.route, type: 'line' },
+    { label: 'Hazard Zone', color: colors.HIGH, type: 'dot' },
+    { label: 'Blocked Road', color: colors.HIGH, type: 'dashed' },
+    { label: 'Current Location', color: colors.primary, type: 'dot' },
+    { label: 'Recommended Route', color: colors.route, type: 'line' },
+    { label: 'Volunteer Responder', color: '#0F766E', type: 'dot' },
   ];
 
   const chips = useMemo(() => {
@@ -46,10 +39,10 @@ export function MapLegend({ items }) {
       }
       let type = 'dot';
       let color = colors.primary;
-      if (label.includes('Risk')) { color = colors.HIGH; type = 'dot'; }
+      if (label.includes('Risk') || label.includes('Hazard')) { color = colors.HIGH; type = 'dot'; }
       else if (label.includes('Blocked')) { color = colors.HIGH; type = 'dashed'; }
       else if (label.includes('Route') || label.includes('Recommended')) { color = colors.route; type = 'line'; }
-      else if (label.includes('Resource')) { color = '#0F766E'; type = 'dot'; }
+      else if (label.includes('Resource') || label.includes('Volunteer')) { color = '#0F766E'; type = 'dot'; }
       return { label, color, type };
     });
   }, [items]);
@@ -107,8 +100,8 @@ const legendStyles = StyleSheet.create({
     width: 12,
     height: 3,
     borderRadius: 1,
-    borderWidth: 1,
     borderColor: colors.HIGH,
+    borderWidth: 1,
     borderStyle: 'dashed',
     marginRight: 5,
   },
@@ -160,24 +153,44 @@ export default function MapView({
   labelBlockedOnly = false,
 }) {
   const mapRef = useRef(null);
-  const me = user || USER;
-  const level = risk ? risk.level : 'LOW';
-  const zoneCenter = (risk && ZONES[risk.zone]) || USER;
+  const userCoord = useMemo(() => normalizeCoord(user), [user]);
+  const level = risk ? (risk.level || risk.risk_level || 'LOW') : 'LOW';
+
+  const defaultRegion = useMemo(() => {
+    if (userCoord) {
+      return {
+        latitude: userCoord.latitude,
+        longitude: userCoord.longitude,
+        latitudeDelta: 0.035,
+        longitudeDelta: 0.035,
+      };
+    }
+    return {
+      latitude: 20.5937,
+      longitude: 78.9629,
+      latitudeDelta: 0.1,
+      longitudeDelta: 0.1,
+    };
+  }, [userCoord]);
 
   const validZones = useMemo(() => {
-    const list = zones || [
-      { latitude: zoneCenter.latitude, longitude: zoneCenter.longitude, radiusKm: ZONE_RADIUS_KM[level] || 0.8, level }
-    ];
-    if (!Array.isArray(list)) return [];
-    return list
-      .map((z) => {
-        if (!z) return null;
-        const pt = normalizeCoord(z);
-        if (!pt || !z.radiusKm || z.radiusKm <= 0) return null;
-        return { ...pt, radiusKm: z.radiusKm, level: z.level || 'LOW' };
-      })
-      .filter(Boolean);
-  }, [zones, level, zoneCenter]);
+    if (Array.isArray(zones) && zones.length > 0) {
+      return zones
+        .map((z) => {
+          if (!z) return null;
+          const pt = normalizeCoord(z);
+          if (!pt || !z.radiusKm || z.radiusKm <= 0) return null;
+          return { ...pt, radiusKm: z.radiusKm, level: z.level || 'LOW' };
+        })
+        .filter(Boolean);
+    }
+    // Only generate zone if risk level is elevated and user location exists
+    if (userCoord && (level === 'HIGH' || level === 'CRITICAL')) {
+      const radiusKm = ZONE_RADIUS_KM[level] || 1.0;
+      return [{ latitude: userCoord.latitude, longitude: userCoord.longitude, radiusKm, level }];
+    }
+    return [];
+  }, [zones, level, userCoord]);
 
   const blockedIds = useMemo(() => new Set((blocked || []).map((r) => r && r.id).filter(Boolean)), [blocked]);
   const altId = alternative && alternative.road ? alternative.road.id : null;
@@ -196,11 +209,10 @@ export default function MapView({
   };
 
   const handleRecenter = () => {
-    if (!mapRef.current) return;
-    const pt = normalizeCoord(me) || DEFAULT_REGION;
+    if (!mapRef.current || !userCoord) return;
     mapRef.current.animateToRegion({
-      latitude: pt.latitude,
-      longitude: pt.longitude,
+      latitude: userCoord.latitude,
+      longitude: userCoord.longitude,
       latitudeDelta: 0.035,
       longitudeDelta: 0.035,
     }, 400);
@@ -225,6 +237,18 @@ export default function MapView({
       /* camera fit safety */
     }
   }, [activeRouteCoords]);
+
+  // Animate to user when location becomes available
+  useEffect(() => {
+    if (mapRef.current && userCoord && !activeRouteCoords) {
+      mapRef.current.animateToRegion({
+        latitude: userCoord.latitude,
+        longitude: userCoord.longitude,
+        latitudeDelta: 0.035,
+        longitudeDelta: 0.035,
+      }, 400);
+    }
+  }, [userCoord?.latitude, userCoord?.longitude]);
 
   // Process roads safely
   const validRoads = useMemo(() => {
@@ -263,7 +287,7 @@ export default function MapView({
   const validIncidents = useMemo(() => {
     if (!Array.isArray(incidents)) return [];
     return incidents
-      .slice(0, 8)
+      .slice(0, 15)
       .map((inc) => {
         if (!inc) return null;
         const pt = normalizeCoord(inc);
@@ -273,15 +297,13 @@ export default function MapView({
       .filter(Boolean);
   }, [incidents]);
 
-  const userCoord = useMemo(() => normalizeCoord(me) || DEFAULT_REGION, [me]);
-
   return (
     <View style={[styles.container, { height }]}>
       <RNMapView
         ref={mapRef}
         style={StyleSheet.absoluteFill}
         provider={PROVIDER_DEFAULT}
-        initialRegion={DEFAULT_REGION}
+        initialRegion={defaultRegion}
         showsUserLocation={false}
         showsCompass={true}
         showsScale={false}
@@ -322,15 +344,14 @@ export default function MapView({
 
           if (isBlocked) {
             return (
-              <React.Fragment key={`road-${road.id}`}>
-                <RNPolyline
-                  coordinates={road.pts}
-                  strokeColor="#DC2626"
-                  strokeWidth={5}
-                  lineDashPattern={[8, 5]}
-                  zIndex={4}
-                />
-              </React.Fragment>
+              <RNPolyline
+                key={`road-${road.id}`}
+                coordinates={road.pts}
+                strokeColor="#DC2626"
+                strokeWidth={5}
+                lineDashPattern={[8, 5]}
+                zIndex={4}
+              />
             );
           }
 
@@ -364,7 +385,7 @@ export default function MapView({
           );
         })}
 
-        {/* 3. RECOMMENDED ALTERNATIVE ROUTE (DIJKSTRA DETOUR) */}
+        {/* 3. RECOMMENDED ALTERNATIVE ROUTE (GOOGLE ROUTES / OSRM) */}
         {activeRouteCoords && (
           <>
             <RNPolyline
@@ -398,22 +419,24 @@ export default function MapView({
             </RNMarker>
           ))}
 
-        {/* 5. USER LOCATION PIN */}
-        <RNMarker
-          coordinate={userCoord}
-          anchor={{ x: 0.5, y: 0.5 }}
-          zIndex={20}
-        >
-          <View style={styles.userPinContainer}>
-            <View style={styles.userPinPulse} />
-            <View style={styles.userPinDot} />
-            <View style={styles.userPinPill}>
-              <Text style={styles.userPinText}>YOU</Text>
+        {/* 5. REAL USER LOCATION PIN */}
+        {userCoord && (
+          <RNMarker
+            coordinate={userCoord}
+            anchor={{ x: 0.5, y: 0.5 }}
+            zIndex={20}
+          >
+            <View style={styles.userPinContainer}>
+              <View style={styles.userPinPulse} />
+              <View style={styles.userPinDot} />
+              <View style={styles.userPinPill}>
+                <Text style={styles.userPinText}>YOU</Text>
+              </View>
             </View>
-          </View>
-        </RNMarker>
+          </RNMarker>
+        )}
 
-        {/* 6. SCENARIO DESTINATION & VOLUNTEER MARKERS */}
+        {/* 6. DESTINATION & VOLUNTEER MARKERS */}
         {validMarkers.map((m) => {
           const isDest = m.id === 'dest';
           return (
@@ -426,7 +449,7 @@ export default function MapView({
               <View style={[styles.customPin, m.highlight && styles.highlightedPin]}>
                 <View style={[styles.pinBadge, { backgroundColor: m.color || colors.navy }]}>
                   <Text style={styles.pinBadgeText}>
-                    {m.label || (isDest ? 'RELIEF CTR' : 'RESOURCE')}
+                    {m.label || (isDest ? 'RELIEF CTR' : 'RESPONDER')}
                   </Text>
                 </View>
               </View>
@@ -434,7 +457,7 @@ export default function MapView({
           );
         })}
 
-        {/* 7. LIVE INCIDENTS */}
+        {/* 7. LIVE REPORTED HAZARD INCIDENTS */}
         {validIncidents.map((inc) => (
           <RNMarker
             key={`inc-${inc.id}`}

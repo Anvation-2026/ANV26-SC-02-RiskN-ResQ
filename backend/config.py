@@ -1,18 +1,18 @@
-"""Tiny .env loader (no extra dependency). Real environment variables always win.
-Keep secrets such as ADMIN_PASSWORD in backend/.env (git-ignored) or in the shell, never in code."""
 import os
 from pathlib import Path
+from dotenv import load_dotenv
 
+# Load .env file from backend root
+env_path = Path(__file__).parent / ".env"
+load_dotenv(dotenv_path=env_path)
 
-def load_env(path: Path = Path(__file__).parent / ".env") -> None:
-    if not path.is_file():
-        return
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+GOOGLE_ROUTES_API_KEY = os.getenv("GOOGLE_ROUTES_API_KEY", "").strip() or None
+IMD_API_KEY = os.getenv("IMD_API_KEY", "").strip() or None
+KSNDMC_API_KEY = os.getenv("KSNDMC_API_KEY", "").strip() or None
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./resilienturban.db").strip()
 
-
-load_env()
+raw_cors = os.getenv("CORS_ORIGINS", "*").strip()
+if raw_cors == "*" or not raw_cors:
+    CORS_ORIGINS = ["*"]
+else:
+    CORS_ORIGINS = [origin.strip() for origin in raw_cors.split(",") if origin.strip()]

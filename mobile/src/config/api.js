@@ -2,11 +2,8 @@ import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 
 // ───────────────────────────────────────────────────────────────
-// >>> CONNECT THE BACKEND HERE <<<
-// Leave null to auto-detect: the app uses the same machine that serves Expo
-// (http://<your-computer-LAN-IP>:8000). To force a URL, set e.g.
-//   const API_URL_OVERRIDE = 'http://192.168.1.20:8000';
-// The backend must listen on all interfaces: uvicorn main:app --host 0.0.0.0 --port 8000
+// PRODUCTION API CONFIGURATION
+// Auto-detects the backend IP address from the Expo host URL.
 // ───────────────────────────────────────────────────────────────
 const API_URL_OVERRIDE = null;
 
@@ -20,10 +17,8 @@ function detectBaseUrl() {
 
 export const API_BASE_URL = detectBaseUrl();
 
-export const FORCE_MOCK = false;       // true = never call the network, use demo data only
-export const DEMO_CONTROLS = true;     // false = hide the DEMO MODE panel (set before final submission)
-export const POLL_MS = 4000;           // how often risk / alerts / roads refresh
-export const REQUEST_TIMEOUT_MS = 2500;
-export const FLOOD_RAINFALL_MM = 80;   // rainfall used by the "Flood Risk" demo control
-export const NORMAL_RAINFALL_MM = 5;
-export const USE_DEVICE_LOCATION = false; // true = real GPS via expo-location; false = deterministic demo location (Bengaluru)
+export const FORCE_MOCK = false;          // Production: Live backend data
+export const DEMO_CONTROLS = false;        // Production: Hide demo controls
+export const POLL_MS = 15000;              // 15-second real-time telemetry sync
+export const REQUEST_TIMEOUT_MS = 6000;    // Network timeout
+export const USE_DEVICE_LOCATION = true;   // Production: Real GPS via expo-location

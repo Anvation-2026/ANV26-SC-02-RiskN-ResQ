@@ -7,7 +7,10 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "RiskNResQ uses your location to show your position, assess nearby disaster risk, calculate routes and connect you with nearby community assistance."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -15,7 +18,11 @@
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
-      }
+      },
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png",
@@ -24,7 +31,12 @@
     },
     "plugins": [
       "expo-font",
-      "expo-secure-store"
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "RiskNResQ uses your location to show your position, assess nearby disaster risk, calculate routes and connect you with nearby community assistance."
+        }
+      ]
     ]
   }
 }

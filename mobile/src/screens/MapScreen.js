@@ -19,68 +19,45 @@ import { useData } from '../context/DataContext';
 import { colors, radius, shadow } from '../theme';
 
 const MODES = [
-  ['live', 'Live Data'],
-  ['response', 'Route & Resources'],
+  ['live', 'Live Telemetry'],
+  ['response', 'Corridor & Response'],
 ];
 
 export default function MapScreen() {
   const insets = useSafeAreaInsets();
   const { height: screenHeight } = useWindowDimensions();
-  const { risk, roads, blocked, alternative, incidents } = useData();
+  const { userLocation, risk, blocked, alternative, incidents, locationLabel } = useData();
   const [mode, setMode] = useState('live');
   const R = useResponse();
 
   // Dominant map height: 50-54% of screen height
   const mapHeight = Math.max(340, Math.min(480, Math.round(screenHeight * 0.50)));
 
-  // Disaster-response scenario translated safely into MapView's props
+  // Real response markers & route line
   const scenario = useMemo(() => {
-    if (!R || !R.graph || !R.graph.edges || !R.graph.nodes) {
-      return { edges: [], blockedEdges: [], routeLine: undefined, markers: [] };
-    }
-    const status = new Map((R.roads || []).map((r) => [r && r.id, r]));
-    const edges = (R.graph.edges || [])
-      .map((e, i) => {
-        const a = R.graph.nodes[e.from];
-        const b = R.graph.nodes[e.to];
-        if (!a || !b) return null;
-        const road = status.get(e.roadId);
-        return {
-          id: `${e.roadId}-${i}`,
-          name: road ? road.name : e.roadId,
-          status: road ? road.status : 'OPEN',
-          coordinates: [
-            [a.latitude, a.longitude],
-            [b.latitude, b.longitude],
-          ],
-        };
-      })
-      .filter(Boolean);
-
-    const dest = (R.destinationNode && R.graph.nodes[R.destinationNode])
-      || R.graph.nodes.D;
-    const matchedId = R.match && R.match.matched && R.match.volunteer ? R.match.volunteer.id : null;
-
     const markers = [];
-    if (dest && typeof dest.latitude === 'number' && typeof dest.longitude === 'number') {
-      const isOverlappingMatched = matchedId && R.match?.volunteer?.latitude === dest.latitude && R.match?.volunteer?.longitude === dest.longitude;
-      if (!isOverlappingMatched) {
-        markers.push({
-          id: 'dest',
-          latitude: dest.latitude,
-          longitude: dest.longitude,
-          label: R.destinationLabel || 'Relief Station Alpha',
-          color: colors.navy,
-        });
-      }
+    const matchedId = R?.match?.matched && R?.match?.volunteer ? String(R.match.volunteer.id) : null;
+
+    if (R?.destinationVolunteer) {
+      const dv = R.destinationVolunteer;
+      markers.push({
+        id: 'dest',
+        latitude: dv.latitude,
+        longitude: dv.longitude,
+        label: `★ ${dv.name} (${dv.resource || dv.skill || 'Responder'})`,
+        color: colors.route,
+        highlight: true,
+      });
     }
 
-    if (Array.isArray(R.volunteers)) {
+    if (Array.isArray(R?.volunteers)) {
       R.volunteers.forEach((v) => {
         if (v && typeof v.latitude === 'number' && typeof v.longitude === 'number') {
-          const isMatched = v.id === matchedId;
+          const isMatched = String(v.id) === matchedId;
+          // Avoid duplicate marker if destinationVolunteer is already added
+          if (isMatched && R?.destinationVolunteer) return;
           markers.push({
-            id: v.id,
+            id: String(v.id),
             latitude: v.latitude,
             longitude: v.longitude,
             highlight: isMatched,
@@ -91,13 +68,14 @@ export default function MapScreen() {
       });
     }
 
+    const routeLine = R?.route && R.route.success && Array.isArray(R.route.coordinates)
+      ? R.route.coordinates
+      : undefined;
+
     return {
-      edges,
-      blockedEdges: edges.filter((e) => e.status === 'BLOCKED'),
-      routeLine:
-        R.route && R.route.success && Array.isArray(R.route.coordinates)
-          ? R.route.coordinates
-          : undefined,
+      edges: [],
+      blockedEdges: [],
+      routeLine,
       markers,
     };
   }, [R]);
@@ -139,37 +117,20 @@ export default function MapScreen() {
 
         <ConnectionBanner />
 
-        {/* LARGE DOMINANT REAL INTERACTIVE MAP WITH ERROR BOUNDARY */}
+        {/* DOMINANT REAL INTERACTIVE MAP */}
         <ErrorBoundary fallbackTitle="Map View Unavailable">
           <View style={styles.mapWrapper}>
-            {mode === 'response' ? (
-              <MapView
-                risk={risk}
-                roads={scenario.edges}
-                blocked={scenario.blockedEdges}
-                alternative={null}
-                zones={Array.isArray(R.zones) ? R.zones.map((z) => ({
-                  latitude: z.latitude,
-                  longitude: z.longitude,
-                  radiusKm: z.radiusKm,
-                  level: z.riskLevel,
-                })) : []}
-                height={mapHeight}
-                routeLine={scenario.routeLine}
-                markers={scenario.markers}
-                user={R.userLocation}
-                labelBlockedOnly
-              />
-            ) : (
-              <MapView
-                risk={risk}
-                roads={roads}
-                blocked={blocked}
-                alternative={alternative}
-                incidents={incidents}
-                height={mapHeight}
-              />
-            )}
+            <MapView
+              risk={risk}
+              blocked={blocked}
+              alternative={alternative}
+              incidents={incidents}
+              height={mapHeight}
+              routeLine={scenario.routeLine}
+              markers={scenario.markers}
+              user={userLocation || R?.userLocation}
+              labelBlockedOnly
+            />
           </View>
         </ErrorBoundary>
 
@@ -186,10 +147,10 @@ export default function MapScreen() {
         ) : (
           <View style={styles.routeCard}>
             <View style={styles.kickerRow}>
-              <Text style={styles.kicker}>ROUTE STATUS</Text>
+              <Text style={styles.kicker}>MONITORED CORRIDORS</Text>
               {blocked.length > 0 && (
                 <View style={styles.blockedPill}>
-                  <Text style={styles.blockedPillText}>INCIDENT REPORTED</Text>
+                  <Text style={styles.blockedPillText}>HAZARD DETECTED</Text>
                 </View>
               )}
             </View>
@@ -199,40 +160,53 @@ export default function MapScreen() {
                 <View style={styles.hazardNotice}>
                   <Feather name="alert-triangle" size={15} color={colors.HIGH} style={{ marginRight: 6 }} />
                   <Text style={styles.warn}>
-                    {names} {blocked.length > 1 ? 'are' : 'is'} BLOCKED
+                    {blocked.length} Active Corridor Blockage{blocked.length > 1 ? 's' : ''}
                   </Text>
                 </View>
+                <Text style={styles.blockedListText} numberOfLines={2}>
+                  {names}
+                </Text>
 
-                {alternative ? (
+                {scenario.routeLine ? (
                   <View style={styles.altSection}>
-                    <Text style={styles.altLabel}>RECOMMENDED ALTERNATIVE ROUTE:</Text>
-                    <Text style={styles.altName}>{alternative.road.name}</Text>
+                    <Text style={styles.altLabel}>ACTIVE REROUTED CORRIDOR:</Text>
+                    <Text style={styles.altName}>
+                      {R?.destinationLabel || 'Validated Safe Path'}
+                    </Text>
                     <View style={styles.stats}>
                       <View style={styles.statBox}>
                         <Text style={styles.sl}>Distance</Text>
-                        <Text style={styles.sv}>{alternative.km.toFixed(1)} km</Text>
+                        <Text style={styles.sv}>
+                          {R?.route?.distanceKm ? `${R.route.distanceKm.toFixed(1)} km` : '--'}
+                        </Text>
                       </View>
                       <View style={styles.statBox}>
                         <Text style={styles.sl}>Est. Time</Text>
-                        <Text style={styles.sv}>{alternative.minutes} min</Text>
+                        <Text style={styles.sv}>
+                          {R?.route?.etaMinutes ? `${R.route.etaMinutes} min` : '--'}
+                        </Text>
                       </View>
                     </View>
-                    <Text style={styles.reasonText}>Reason: Avoids reported blocked road.</Text>
+                    <Text style={styles.reasonText}>
+                      Reason: {R?.route?.reason || 'Avoids reported blocked road.'}
+                    </Text>
                   </View>
                 ) : (
-                  <Text style={styles.noAltText}>No alternative route is available in current telemetry.</Text>
+                  <Text style={styles.noAltText}>
+                    Switch to Corridor & Response to calculate an automated detour around active hazards.
+                  </Text>
                 )}
               </>
             ) : (
               <View style={styles.okSection}>
                 <Feather name="check-circle" size={16} color={colors.LOW} style={{ marginRight: 6 }} />
-                <Text style={styles.ok}>No blocked roads reported. All monitored corridors open.</Text>
+                <Text style={styles.ok}>No blocked corridors reported in your vicinity.</Text>
               </View>
             )}
 
             <View style={styles.noteDivider} />
             <Text style={styles.note}>
-              Recommended alternative route based on available incident data.
+              Recommended alternative route based on available route and incident data.
             </Text>
           </View>
         )}
@@ -332,15 +306,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 8,
     borderRadius: 6,
-    marginBottom: 10,
+    marginBottom: 6,
   },
   warn: {
     fontSize: 14,
     fontFamily: 'PlusJakartaSans_800ExtraBold',
     color: colors.HIGH,
   },
+  blockedListText: {
+    fontSize: 12,
+    fontFamily: 'PlusJakartaSans_600SemiBold',
+    color: '#475569',
+    marginBottom: 8,
+  },
   altSection: {
-    marginTop: 2,
+    marginTop: 4,
   },
   altLabel: {
     fontSize: 12,
@@ -349,7 +329,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
   },
   altName: {
-    fontSize: 18,
+    fontSize: 16,
     fontFamily: 'PlusJakartaSans_800ExtraBold',
     color: colors.route,
     marginVertical: 3,
@@ -385,7 +365,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   noAltText: {
-    fontSize: 13,
+    fontSize: 12,
     fontFamily: 'PlusJakartaSans_500Medium',
     color: colors.muted,
     marginVertical: 6,

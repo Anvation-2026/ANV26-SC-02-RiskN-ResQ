@@ -1,129 +1,165 @@
-// API service layer. Every call tries the live backend first and silently falls
-// back to centralised mock data (mockData.js) when it is unreachable.
-import { API_BASE_URL, FORCE_MOCK, REQUEST_TIMEOUT_MS, FLOOD_RAINFALL_MM, NORMAL_RAINFALL_MM } from '../config/api';
-import { USER, routeInfo } from './geo';
-import { matchBackendVolunteers } from '../integration/volunteerAdapter';
-import * as mock from './mockData';
-import { getToken, notifyUnauthorized } from './session';
+/**
+ * Production API service layer for RiskNResQ.
+ * Communicates directly with the FastAPI real-data backend.
+ * Zero hardcoded synthetic demo data or fake coordinates.
+ */
+import { API_BASE_URL, REQUEST_TIMEOUT_MS, FORCE_MOCK } from '../config/api';
 
-let source = 'demo'; // 'live' | 'demo' — what the last call actually used
+let source = 'live';
 export const getSource = () => source;
 
-export async function http(path, options = {}) {
-  if (FORCE_MOCK) throw new Error('mock mode');
+async function http(path, options = {}) {
+  if (FORCE_MOCK) throw new Error('MOCK_MODE_ACTIVE');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  const token = getToken();
   try {
     const res = await fetch(API_BASE_URL + path, {
+      headers: { 'Content-Type': 'application/json' },
       ...options,
-      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options.headers },
       body: options.body ? JSON.stringify(options.body) : undefined,
       signal: controller.signal,
     });
     if (!res.ok) {
-      let detail = null;
-      try { const b = await res.json(); detail = typeof b.detail === 'string' ? b.detail : null; } catch (e) { /* not JSON */ }
-      const err = new Error(detail || `Request failed (${res.status})`);
-      err.status = res.status;
-      err.detail = detail;
-      if (res.status === 401 && token && !path.startsWith('/auth/login')) notifyUnauthorized();
-      throw err;
+      const errorText = await res.text().catch(() => '');
+      throw new Error(`API ${res.status}: ${errorText || res.statusText}`);
     }
+    source = 'live';
     return await res.json();
+  } catch (err) {
+    source = 'offline';
+    throw err;
   } finally {
     clearTimeout(timer);
   }
 }
 
-// Demo data is used ONLY when the server cannot be reached. A real HTTP error (validation, permission,
-// expired login) is never turned into a fake success: it is re-thrown for the screen to show.
-async function withFallback(live, fallback) {
-  try {
-    const data = await live();
-    source = 'live';
-    return data;
-  } catch (e) {
-    if (e && e.status) throw e;
-    source = 'demo';
-    return fallback();
+// ── 1. REAL TELEMETRY SYNC ──────────────────────────────────────────────
+export async function syncTelemetry(latitude, longitude) {
+  if (typeof latitude !== 'number' || typeof longitude !== 'number') {
+    throw new Error('Valid GPS coordinates are required for telemetry sync.');
   }
+  return await http(`/sync?latitude=${latitude}&longitude=${longitude}`);
 }
 
-// ── reads ──────────────────────────────────────────────
-export async function getRisk() {
-  const raw = await withFallback(() => http('/risk'), mock.mockRisk);
-  const o = raw.overall || raw;
-  return { score: o.risk_score, level: o.risk_level, zone: o.location, reason: o.reason, rainfall: o.rainfall, zones: raw.zones || [o] };
+// ── 2. REAL FLOOD RISK EVALUATION ───────────────────────────────────────
+export async function getRisk(latitude, longitude) {
+  if (typeof latitude !== 'number' || typeof longitude !== 'number') {
+    throw new Error('Valid GPS coordinates are required for risk calculation.');
+  }
+  const raw = await http(`/risk?latitude=${latitude}&longitude=${longitude}`);
+  return {
+    score: raw.risk_score,
+    level: raw.risk_level,
+    zone: raw.location || `${raw.latitude.toFixed(4)}, ${raw.longitude.toFixed(4)}`,
+    reason: raw.reason,
+    rainfall: raw.rainfall_24h_mm,
+    intensity: raw.rainfall_intensity_mm_per_hour,
+    warning: raw.warning_level,
+    weatherSource: raw.weather_source,
+    factors: raw.factors,
+    observedAt: raw.observed_at,
+  };
 }
 
-export async function getAlerts() {
-  const raw = await withFallback(() => http('/alerts?active_only=true'), mock.mockAlerts);
-  return raw.filter((a) => a.active !== false).map((a) => ({
-    id: a.id, severity: a.severity, message: a.message, zone: a.affected_zone, createdAt: a.created_at,
-  }));
+// ── 3. INCIDENTS & HAZARDS ──────────────────────────────────────────────
+export async function getIncidents(latitude, longitude, radiusKm = 25.0) {
+  let url = '/incidents';
+  if (typeof latitude === 'number' && typeof longitude === 'number') {
+    url += `?latitude=${latitude}&longitude=${longitude}&radius_km=${radiusKm}`;
+  }
+  return await http(url);
 }
 
-export const getIncidents = () => withFallback(() => http('/incidents'), mock.mockIncidents);
+export async function submitIncident({ type, description, latitude, longitude, severity = 3 }) {
+  if (typeof latitude !== 'number' || typeof longitude !== 'number') {
+    throw new Error('GPS coordinates are required to submit an incident.');
+  }
 
-export async function getRoute() {
-  // Backend has no /route: derive blocked roads + alternative from GET /roads.
-  const roads = await withFallback(() => http('/roads'), mock.mockRoads);
-  return routeInfo(roads);
+  // Map client types to backend enum
+  let mappedType = type;
+  if (type === 'FLOOD') mappedType = 'FLOODED_ROAD';
+  else if (type === 'EMERGENCY') mappedType = 'OTHER';
+
+  const body = {
+    type: mappedType,
+    description: description || 'Reported via RiskNResQ mobile application',
+    severity: Math.min(5, Math.max(1, severity)),
+    latitude,
+    longitude,
+    radiusMeters: 50.0,
+    reportedBy: 'Citizen Reporter',
+  };
+
+  return await http('/incidents', { method: 'POST', body });
 }
 
-// ── writes ─────────────────────────────────────────────
-export function submitIncident({ type, description }) {
-  const body = { type, description, severity: 3, latitude: USER.latitude, longitude: USER.longitude };
-  return withFallback(() => http('/incidents', { method: 'POST', body }), () => mock.mockSubmitIncident(body));
+// ── 4. REAL INCIDENT-AWARE ROUTING ──────────────────────────────────────
+export async function computeRoute(origin, destination, travelMode = 'DRIVE') {
+  if (!origin || !destination) {
+    throw new Error('Origin and destination coordinates are required for route computation.');
+  }
+
+  const body = {
+    origin: {
+      latitude: origin.latitude,
+      longitude: origin.longitude,
+    },
+    destination: {
+      latitude: destination.latitude,
+      longitude: destination.longitude,
+    },
+    travelMode,
+  };
+
+  return await http('/routes/compute', { method: 'POST', body });
 }
 
+// ── 5. REAL VOLUNTEER REGISTRATION & PRESENCE ───────────────────────────
+export async function registerVolunteer({ name, skill, resources, phone, latitude, longitude }) {
+  const body = {
+    name,
+    skill: skill || 'COMMUNITY_RESPONDER',
+    resources: resources || 'Emergency Assistance',
+    phone,
+    latitude,
+    longitude,
+  };
+  return await http('/volunteers/register', { method: 'POST', body });
+}
+
+export async function getNearbyVolunteers(latitude, longitude, radiusKm = 15.0, resource = null) {
+  let url = `/volunteers/nearby?latitude=${latitude}&longitude=${longitude}&radius_km=${radiusKm}`;
+  if (resource) {
+    url += `&resource=${encodeURIComponent(resource)}`;
+  }
+  return await http(url);
+}
+
+export async function updateVolunteerLocation(volunteerId, latitude, longitude) {
+  return await http(`/volunteers/${volunteerId}/location`, {
+    method: 'POST',
+    body: { latitude, longitude },
+  });
+}
+
+// ── 6. REAL HELP REQUESTS & MATCHING ────────────────────────────────────
 let lastMatch = null;
 export const getMatch = () => lastMatch;
 
-export async function requestHelp({ type, priority }) {
-  const body = { type, priority, latitude: USER.latitude, longitude: USER.longitude };
-  const request = await withFallback(() => http('/help-request', { method: 'POST', body }), () => mock.mockHelp(body));
-  const live = source === 'live';
-  const volunteers = live ? await http('/volunteers').catch(() => []) : mock.mockVolunteers();
-  const result = matchBackendVolunteers(volunteers, body); // module matching engine
-  const match = result.matched
-    ? {
-        volunteerId: Number(result.volunteer.id), volunteer: result.volunteer.name, resource: result.resource,
-        distanceKm: result.distanceKm, status: 'Available', score: result.matchScore, breakdown: result.scoreBreakdown,
-      }
-    : null;
-  if (live && match) {
-    http('/matches', { method: 'POST', body: { help_request_id: request.request_id, volunteer_id: match.volunteerId } }).catch(() => {});
+export async function requestHelp({ type, priority = 'HIGH', latitude, longitude }) {
+  if (typeof latitude !== 'number' || typeof longitude !== 'number') {
+    throw new Error('GPS coordinates are required to request emergency assistance.');
   }
-  lastMatch = { requestId: request.request_id, match };
-  return lastMatch;
-}
 
-// ── DEMO control (see components/DemoPanel.js) ─────────
-export async function setDemoScenario(scenario) {
-  const flood = scenario === 'flood';
-  const rainfall = flood ? FLOOD_RAINFALL_MM : NORMAL_RAINFALL_MM;
-  try {
-    if (!flood) await http('/reset', { method: 'POST' });
-    await http('/simulate-hazard', { method: 'POST', body: { hazard: 'FLOOD', rainfall } });
-    const roads = await http('/roads');
-    for (const r of roads) {
-      const shouldBlock = flood && r.id === roads[0].id;
-      if (shouldBlock && r.status !== 'BLOCKED') await http(`/roads/${r.id}/block`, { method: 'POST' });
-      if (!shouldBlock && r.status === 'BLOCKED') await http(`/roads/${r.id}/unblock`, { method: 'POST' });
-    }
-    source = 'live';
-  } catch (e) {
-    source = 'demo';
-  }
-  mock.mockSetScenario(scenario, rainfall); // keep demo data in step either way
-}
+  const body = {
+    userId: 1,
+    type,
+    priority,
+    latitude,
+    longitude,
+  };
 
-// Keep the backend's first road ("Road A") in step with the module's ROAD_A demo control. Best effort.
-export async function syncRoadA(blocked) {
-  try {
-    const roads = await http('/roads');
-    if (roads.length) await http(`/roads/${roads[0].id}/${blocked ? 'block' : 'unblock'}`, { method: 'POST' });
-  } catch (e) { /* backend optional */ }
+  const response = await http('/help-requests', { method: 'POST', body });
+  lastMatch = response;
+  return response;
 }
