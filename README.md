@@ -108,6 +108,22 @@ npx tsc --noEmit        # type check
 npx jest --runInBand    # 16 tests
 ```
 
+## Volunteer portal
+
+Volunteers sign in on the same login screen; the backend decides the role and opens the volunteer portal (Home, Requests, Nearby, Map, Account). Volunteer accounts are created only by a Super Admin (People → Add Volunteer).
+
+- **Home:** availability (saved in the database; unavailable volunteers are never matched to new requests), assigned / nearby / completed counts, resource and location, and a "New help request assigned" banner plus a badge on the Requests tab when an assignment arrives.
+- **Requests:** active and completed requests, request details (priority, zone, distance, requester name and phone for assigned requests only), **Accept** and **Mark as completed**. Invalid steps (accepting twice, completing before accepting, touching someone else's request) are refused by the backend.
+- **Nearby:** open, unassigned requests that match the volunteer's skill or resources within 15 km, sorted by priority then distance; **Accept request** claims one (`POST /help-requests/{id}/claim`).
+- **Map:** the app's existing map with your location, the requests (high priority marked), blocked roads and a recommended route to the selected request ("Recommended route based on available incident data."). If location is unavailable the portal still works and says so; "Update from my GPS" saves the phone's position.
+- A user sees the real status of their own requests under **Help → My requests**; the admin sees everything under **Requests**.
+
+## Photos, weather and storage
+
+- **Weather:** `GET /weather?latitude=&longitude=` returns the current rainfall and its source (Open-Meteo by default). The existing risk engine builds the risk score from the same provider, together with credible reports; the weather alone never declares a flood.
+- **Cloudinary (incident photos):** set `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY` and `CLOUDINARY_API_SECRET` in `backend/.env`. The app sends the photo to the backend, the backend uploads it (signed, the secret never leaves the server) and PostgreSQL stores only the image URL. Photos are served to the reporter and admins through an authorised redirect to a resized copy. Without those variables the backend keeps photos on its own disk. If Cloudinary is unreachable the report is still saved and the app says the photo could not be stored.
+- **Environment files:** `backend/.env.example` and `mobile/.env.example` list every variable. Only `EXPO_PUBLIC_API_URL` belongs in the mobile app; database URLs, the Cloudinary secret and the admin password stay on the backend.
+
 ## Real data and demo data
 
 Normal operation uses **real data only**, stored in PostgreSQL: accounts, volunteers, incident reports (and their photos), help requests, matches, road status and alerts. Nothing is created automatically: a fresh database contains just the Super Admin from `.env`, the road network (reference data) and zone baselines. The app has **no built-in sample or mock data and no silent fallback**: if the server cannot be reached it says "Unable to connect to the server." and keeps showing the last data it received.

@@ -12,12 +12,13 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, sta
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 import auth
 import config
 import db
+import storage
 from engine import (
     _km,
     compute_flood_risk,
@@ -144,7 +145,8 @@ def incident_out(c, r, include_user: bool = False) -> dict:
     d["similar_reports"] = similar_count(c, d)
     d["confidence"] = confidence_label(d["trust_score"])
     d["user_id"] = d.get("user_id") if include_user else None
-    d["has_photo"] = bool(d.pop("photo_file", None))  # the stored file name stays server-side
+    # storage details stay server-side; clients only learn whether a photo exists (fetched via /incidents/{id}/photo)
+    d["has_photo"] = bool(d.pop("photo_file", None)) | bool(d.pop("photo_url", None))
     return d
 
 
@@ -455,7 +457,7 @@ def report_incident(body: IncidentCreate, user: dict = Depends(auth.current_user
                 (body.description or "").strip(),
                 body.severity,
                 body.reportedBy or user["name"],
-                body.photoUrl,
+                None,  # photo_url is set only by the server after a real upload
                 zone,
                 user["id"],
                 now_t,
@@ -539,19 +541,33 @@ async def upload_incident_photo(incident_id: int, request: Request, user: dict =
         raise HTTPException(415, "Unsupported file. Please upload a JPEG, PNG or WebP image.")
     with db.session() as c:
         r = _own_incident(c, incident_id, user)
-        if r["photo_file"]:
+        if r["photo_file"] or r["photo_url"]:
             raise HTTPException(409, "This incident already has a photo.")
-        name = f"incident_{incident_id}_{secrets.token_hex(8)}.{ext}"  # server-chosen name: no client path ever used
-        store_photo(name, data)
-        c.execute("UPDATE incidents SET photo_file=? WHERE id=?", (name, incident_id))
-    return {"incident_id": incident_id, "stored": True, "content_type": PHOTO_TYPES[ext], "size_bytes": len(data)}
+    name = f"incident_{incident_id}_{secrets.token_hex(8)}"  # server-chosen name: no client path ever used
+    if storage.cloud_configured():
+        try:
+            url = await storage.upload_image(data, name, PHOTO_TYPES[ext])
+        except RuntimeError:
+            logger.exception("photo upload to Cloudinary failed")
+            raise HTTPException(502, "Photo storage is unavailable right now. The report itself is saved; please try the photo again.")
+        with db.session() as c:
+            c.execute("UPDATE incidents SET photo_url=? WHERE id=?", (url, incident_id))
+        where = "cloudinary"
+    else:
+        store_photo(f"{name}.{ext}", data)
+        with db.session() as c:
+            c.execute("UPDATE incidents SET photo_file=? WHERE id=?", (f"{name}.{ext}", incident_id))
+        where = "local"
+    return {"incident_id": incident_id, "stored": True, "storage": where, "content_type": PHOTO_TYPES[ext], "size_bytes": len(data)}
 
 
 @app.get("/incidents/{incident_id}/photo")
 def get_incident_photo(incident_id: int, user: dict = Depends(auth.current_user)):
     with db.session() as c:
         r = _own_incident(c, incident_id, user)
-        name = r["photo_file"]
+        name, cloud_url = r["photo_file"], r["photo_url"]
+    if cloud_url:  # access was checked above; the image itself is served by Cloudinary's CDN (resized, not full-size)
+        return RedirectResponse(storage.thumbnail_url(cloud_url), status_code=307)
     path = photo_file(name)
     if not path:
         raise HTTPException(404, "This incident has no photo.")
@@ -611,7 +627,7 @@ class RouteComputeIn(BaseModel):
 
 
 @app.post("/routes/compute")
-async def compute_route(body: RouteComputeIn):
+async def compute_route(body: RouteComputeIn, user: dict = Depends(auth.current_user)):
     c = db.conn()
     rows = c.execute(
         "SELECT * FROM incidents WHERE status IN ('REPORTED', 'VERIFIED') ORDER BY id DESC"
@@ -789,8 +805,8 @@ def create_volunteer(body: VolunteerIn, _: dict = Depends(auth.require_admin)):
              t, body.latitude, body.longitude),
         )
         cur = c.execute(
-            "INSERT INTO volunteers(name, skill, resources, phone, latitude, longitude, available, user_id, status, created_at, updated_at) "
-            "VALUES(?,?,?,?,?,?,?,?,'ACTIVE',?,?)",
+            "INSERT INTO volunteers(name, skill, resources, phone, latitude, longitude, available, responder_mode, user_id, status, created_at, updated_at) "
+            "VALUES(?,?,?,?,?,?,?,1,?,'ACTIVE',?,?)",  # a volunteer with a login is a responder: visible on maps and nearby lists
             (body.name.strip(), body.skill, body.skill, body.phone, body.latitude, body.longitude, int(body.available), u.lastrowid, t, t),
         )
         return volunteer_full(c, one(c, "volunteers", cur.lastrowid, "Volunteer"))
@@ -803,52 +819,70 @@ def _my_row(c, user: dict):
     return v
 
 
+PRIORITY_RANK = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1}
+
+
+def _suitable(v, request_type: str) -> bool:
+    """Does this volunteer's skill or listed resources cover the requested help type? (same rule the matcher uses)"""
+    want = (request_type or "").strip().lower().replace("_", " ")
+    have = f"{v['skill'] or ''} {dict(v).get('resources') or ''}".lower().replace("_", " ")
+    return bool(want) and want in have
+
+
+def _request_dict(c, v, r, **extra):
+    d = dict(r)
+    dist = None
+    if None not in (d["latitude"], d["longitude"], v["latitude"], v["longitude"]):
+        dist = round(_km(v["latitude"], v["longitude"], d["latitude"], d["longitude"]), 2)  # existing distance helper
+    return {
+        "request_id": d["id"], "type": d["type"], "priority": d["priority"], "status": d["status"],
+        "latitude": d["latitude"], "longitude": d["longitude"], "distance_km": dist, "created_at": d["created_at"],
+        "zone": db.nearest_zone(d["latitude"], d["longitude"]) if d["latitude"] is not None and d["longitude"] is not None else None,
+        **extra,
+    }
+
+
 def _my_requests(c, v):
+    """assigned = my active matches (with the requester's name/phone, needed to help them);
+    nearby_open = unassigned open requests I could fulfil, highest priority first then nearest (no requester details);
+    completed = my finished requests."""
     assigned = []
     for m in c.execute("SELECT * FROM matches WHERE volunteer_id=? AND status IN ('PROPOSED','MATCHED','ACCEPTED') ORDER BY id DESC", (v["id"],)):
         r = c.execute("SELECT * FROM help_requests WHERE id=?", (m["help_request_id"],)).fetchone()
-        who = c.execute("SELECT name, phone FROM users WHERE id=?", (r["user_id"],)).fetchone() if r and dict(r).get("user_id") else None
-        dist = None
-        if None not in (r["latitude"], r["longitude"], v["latitude"], v["longitude"]):
-            dist = round(_km(v["latitude"], v["longitude"], r["latitude"], r["longitude"]), 2)
-        assigned.append({
-            "match_id": m["id"],
-            "match_status": m["status"],
-            "request_id": r["id"],
-            "type": r["type"],
-            "priority": r["priority"],
-            "status": r["status"],
-            "latitude": r["latitude"],
-            "longitude": r["longitude"],
-            "distance_km": dist,
-            "created_at": r["created_at"],
-            "requester_name": who["name"] if who else None,
-            "requester_phone": who["phone"] if who else None,
-        })
+        if not r:
+            continue
+        who = c.execute("SELECT name, phone FROM users WHERE id=?", (r["user_id"],)).fetchone() if r["user_id"] else None
+        assigned.append(_request_dict(c, v, r, match_id=m["id"], match_status=m["status"],
+                                      requester_name=who["name"] if who else None,
+                                      requester_phone=who["phone"] if who else None))
     nearby = []
     if v["status"] == "ACTIVE":
-        for r in c.execute("SELECT * FROM help_requests WHERE status='OPEN' AND type=? ORDER BY id DESC", (v["skill"],)):
-            if None in (r["latitude"], r["longitude"], v["latitude"], v["longitude"]):
+        for r in c.execute("SELECT * FROM help_requests WHERE status='OPEN' ORDER BY id DESC"):
+            if not _suitable(v, r["type"]) or None in (r["latitude"], r["longitude"], v["latitude"], v["longitude"]):
                 continue
-            d = round(_km(v["latitude"], v["longitude"], r["latitude"], r["longitude"]), 2)
-            if d <= 15:
-                nearby.append({
-                    "request_id": r["id"],
-                    "type": r["type"],
-                    "priority": r["priority"],
-                    "distance_km": d,
-                    "created_at": r["created_at"],
-                })
-        nearby.sort(key=lambda x: x["distance_km"])
-    return assigned, nearby
+            item = _request_dict(c, v, r)
+            if item["distance_km"] is not None and item["distance_km"] <= 15:
+                nearby.append(item)
+        nearby.sort(key=lambda x: (-PRIORITY_RANK.get(x["priority"], 0), x["distance_km"]))
+    completed = []
+    for m in c.execute("SELECT * FROM matches WHERE volunteer_id=? AND status='COMPLETED' ORDER BY id DESC LIMIT 25", (v["id"],)):
+        r = c.execute("SELECT * FROM help_requests WHERE id=?", (m["help_request_id"],)).fetchone()
+        if r:
+            completed.append(_request_dict(c, v, r, match_id=m["id"], match_status="COMPLETED"))
+    return assigned, nearby, completed
+
+
+def _completed_total(c, v) -> int:
+    return c.execute("SELECT COUNT(*) FROM matches WHERE volunteer_id=? AND status='COMPLETED'", (v["id"],)).fetchone()[0]
 
 
 @app.get("/volunteers/me")
 def my_volunteer(user: dict = Depends(auth.require_volunteer)):
     with db.session() as c:
         v = _my_row(c, user)
-        assigned, nearby = _my_requests(c, v)
-        return {"volunteer": volunteer_full(c, v), "assigned_count": len(assigned), "nearby_open_count": len(nearby)}
+        assigned, nearby, _ = _my_requests(c, v)
+        return {"volunteer": volunteer_full(c, v), "assigned_count": len(assigned), "nearby_open_count": len(nearby),
+                "completed_count": _completed_total(c, v)}
 
 
 @app.patch("/volunteers/me")
@@ -868,8 +902,33 @@ def update_my_volunteer(body: MyVolunteerUpdate, user: dict = Depends(auth.requi
 @app.get("/volunteers/me/requests")
 def my_requests(user: dict = Depends(auth.require_volunteer)):
     with db.session() as c:
-        assigned, nearby = _my_requests(c, _my_row(c, user))
-        return {"assigned": assigned, "nearby_open": nearby}
+        v = _my_row(c, user)
+        assigned, nearby, completed = _my_requests(c, v)
+        return {"assigned": assigned, "nearby_open": nearby, "completed": completed,
+                "stats": {"assigned": len(assigned), "nearby": len(nearby), "completed": _completed_total(c, v)}}
+
+
+@app.post("/help-requests/{request_id}/claim", status_code=201)
+def claim_request(request_id: int, user: dict = Depends(auth.require_volunteer)):
+    """A volunteer accepts an open, unassigned request they are suited for. Creates the match as ACCEPTED."""
+    with db.session() as c:
+        v = _my_row(c, user)
+        if v["status"] != "ACTIVE" or not v["available"]:
+            raise HTTPException(409, "Set yourself as available before accepting requests.")
+        r = one(c, "help_requests", request_id, "Help request")
+        if r["status"] != "OPEN" or c.execute("SELECT 1 FROM matches WHERE help_request_id=? AND status IN ('PROPOSED','MATCHED','ACCEPTED','COMPLETED')", (request_id,)).fetchone():
+            raise HTTPException(409, "This request is no longer open.")
+        if not _suitable(v, r["type"]):
+            raise HTTPException(422, "This request does not match your skills or resources.")
+        dist = None
+        if None not in (r["latitude"], r["longitude"], v["latitude"], v["longitude"]):
+            dist = round(_km(v["latitude"], v["longitude"], r["latitude"], r["longitude"]), 2)
+        cur = c.execute(
+            "INSERT INTO matches(help_request_id, volunteer_id, distance_km, eta_minutes, status, created_at) VALUES (?,?,?,?,'ACCEPTED',?)",
+            (request_id, v["id"], dist or 0.0, max(1, round((dist or 0) / 25.0 * 60)), db.now()),
+        )
+        c.execute("UPDATE help_requests SET status='MATCHED' WHERE id=?", (request_id,))
+        return match_out(c, one(c, "matches", cur.lastrowid, "Match"))
 
 
 @app.put("/volunteers/{volunteer_id}")
@@ -922,7 +981,8 @@ class VolunteerRegisterIn(BaseModel):
 
 
 @app.post("/volunteers/register", status_code=status.HTTP_201_CREATED)
-def register_volunteer(body: VolunteerRegisterIn):
+def register_volunteer(body: VolunteerRegisterIn, _: dict = Depends(auth.require_admin)):
+    """Admin only: creates a roster entry without a login. Volunteers with logins come from POST /volunteers."""
     c = db.conn()
     now_t = now_iso()
     cur = c.execute(
@@ -944,10 +1004,11 @@ class VolunteerLocationIn(BaseModel):
 
 
 @app.post("/volunteers/{volunteer_id}/location")
-def update_volunteer_location(volunteer_id: int, body: VolunteerLocationIn):
+def update_volunteer_location(volunteer_id: int, body: VolunteerLocationIn,
+                              user: dict = Depends(auth.require_roles(auth.ROLE_VOLUNTEER, auth.ROLE_ADMIN))):
     c = db.conn()
     row = c.execute("SELECT * FROM volunteers WHERE id=?", (volunteer_id,)).fetchone()
-    if not row:
+    if not row or (user["role"] != auth.ROLE_ADMIN and row["user_id"] != user["id"]):  # a volunteer may only move themselves
         c.close()
         raise HTTPException(404, "Volunteer not found")
 
@@ -967,10 +1028,11 @@ class VolunteerAvailabilityIn(BaseModel):
 
 
 @app.post("/volunteers/{volunteer_id}/availability")
-def set_volunteer_availability(volunteer_id: int, body: VolunteerAvailabilityIn):
+def set_volunteer_availability(volunteer_id: int, body: VolunteerAvailabilityIn,
+                               user: dict = Depends(auth.require_roles(auth.ROLE_VOLUNTEER, auth.ROLE_ADMIN))):
     c = db.conn()
     row = c.execute("SELECT * FROM volunteers WHERE id=?", (volunteer_id,)).fetchone()
-    if not row:
+    if not row or (user["role"] != auth.ROLE_ADMIN and row["user_id"] != user["id"]):  # a volunteer may only change their own status
         c.close()
         raise HTTPException(404, "Volunteer not found")
 
@@ -989,6 +1051,7 @@ def get_nearby_volunteers(
     longitude: float = Query(..., ge=-180.0, le=180.0),
     radius_km: float = 15.0,
     resource: Optional[str] = None,
+    user: dict = Depends(auth.current_user),
 ):
     c = db.conn()
     rows = c.execute(
@@ -1001,6 +1064,8 @@ def get_nearby_volunteers(
             continue
         dist_m = haversine_meters(latitude, longitude, item["latitude"], item["longitude"])
         if dist_m <= radius_km * 1000.0:
+            if user["role"] != auth.ROLE_ADMIN:  # no contact details or account ids for non-admins
+                item = {k: item.get(k) for k in ("id", "name", "skill", "resources", "latitude", "longitude", "available")}
             item["distanceKm"] = round(dist_m / 1000.0, 2)
             results.append(item)
 
@@ -1067,13 +1132,13 @@ class HelpRequestIn(BaseModel):
 
 
 @app.post("/help-requests", status_code=status.HTTP_201_CREATED)
-def request_help(body: HelpRequestIn):
+def request_help(body: HelpRequestIn, user: dict = Depends(auth.current_user)):
     c = db.conn()
     now_t = now_iso()
     cur = c.execute(
         "INSERT INTO help_requests(user_id, type, priority, latitude, longitude, status, created_at) "
         "VALUES (?,?,?,?,?,'OPEN',?)",
-        (body.userId, body.type, body.priority, body.latitude, body.longitude, now_t),
+        (user["id"], body.type, body.priority, body.latitude, body.longitude, now_t),  # owner = the signed-in user, never the body
     )
     req_id = cur.lastrowid
 
@@ -1419,6 +1484,17 @@ def unblock_road(road_id: int, _: dict = Depends(auth.require_admin)):
 # ==========================================
 # 10. Real-Time Telemetry Bundle (/sync)
 # ==========================================
+
+@app.get("/weather")
+async def get_weather(latitude: float = Query(..., ge=-90.0, le=90.0), longitude: float = Query(..., ge=-180.0, le=180.0)):
+    """Current rainfall for a position from the configured weather provider (Open-Meteo by default). The risk engine
+    uses this same provider, so this is the data the risk score is built from."""
+    try:
+        obs = await weather_provider.get_weather(latitude, longitude)
+    except Exception:
+        raise HTTPException(503, "The weather service is unavailable right now.")
+    return {**obs.model_dump(), "precipitation_mm": obs.rainfall_24h_mm, "timestamp": obs.observed_at}
+
 
 @app.get("/sync")
 async def sync_telemetry(

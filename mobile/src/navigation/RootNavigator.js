@@ -9,7 +9,7 @@ import LoginScreen from '../screens/auth/LoginScreen';
 import RegisterScreen from '../screens/auth/RegisterScreen';
 import AppNavigator from './AppNavigator';
 import AdminNavigator from './AdminNavigator';
-import VolunteerDashboard from '../screens/volunteer/VolunteerDashboard';
+import VolunteerNavigator from './VolunteerNavigator';
 
 export default function RootNavigator() {
   const { status, user } = useAuth();
@@ -22,7 +22,7 @@ export default function RootNavigator() {
   if (status === 'out') {
     return mode === 'login' ? <LoginScreen goRegister={() => setMode('register')} /> : <RegisterScreen goLogin={() => setMode('login')} />;
   }
-  if (user.role === 'volunteer') return <VolunteerDashboard />;
+  if (user.role === 'volunteer') return <VolunteerNavigator />; // dedicated volunteer portal: no user or admin screens
 
   // user and admin both read risk/alerts/roads; the data providers poll only for signed-in sessions.
   return (

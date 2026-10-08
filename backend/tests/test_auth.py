@@ -388,7 +388,7 @@ def test_disaster_features_still_work_for_every_role(client):
 def test_volunteer_sees_and_handles_a_request_matched_by_the_help_request_endpoint(client):
     vc, v = volunteer_client(client, latitude=12.9716, longitude=77.5946)  # closer than the seeded demo volunteer
     # the app's request goes through POST /help-requests, which matches on the server and saves status MATCHED
-    r = anon().post("/help-requests", json={"type": "MEDICINE", "priority": "HIGH", "latitude": 12.9716, "longitude": 77.5946})
+    r = user_client().post("/help-requests", json={"type": "MEDICINE", "priority": "HIGH", "latitude": 12.9716, "longitude": 77.5946})
     assert r.status_code == 201 and r.json()["match"]["matched"] is True
     mine = vc.get("/volunteers/me/requests").json()
     assert len(mine["assigned"]) == 1 and mine["assigned"][0]["match_status"] == "MATCHED"

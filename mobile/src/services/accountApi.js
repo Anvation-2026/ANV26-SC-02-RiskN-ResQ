@@ -14,6 +14,7 @@ export const apiLogout = () => http('/auth/logout', { method: 'POST' });
 export const getMyVolunteer = () => http('/volunteers/me');
 export const patchMyVolunteer = (body) => http('/volunteers/me', { method: 'PATCH', body });
 export const getMyRequests = () => http('/volunteers/me/requests');
+export const claimRequest = (requestId) => http(`/help-requests/${requestId}/claim`, { method: 'POST' });
 export const acceptMatch = (id) => http(`/matches/${id}/accept`, { method: 'POST' });
 export const completeMatch = (id) => http(`/matches/${id}/complete`, { method: 'POST' });
 

@@ -5,6 +5,7 @@ import Feather from '@expo/vector-icons/Feather';
 import Header from '../components/Header';
 import ActionButton from '../components/ActionButton';
 import MatchCard from '../components/MatchCard';
+import MyHelpRequests from '../components/MyHelpRequests';
 import { Chip } from './ReportScreen';
 import { useData } from '../context/DataContext';
 import { useResponse } from '../context/ResponseContext';
@@ -168,6 +169,7 @@ export default function HelpScreen({ navigate }) {
             </View>
           </>
         )}
+        <MyHelpRequests />
       </ScrollView>
     </View>
   );

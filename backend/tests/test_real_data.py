@@ -40,7 +40,8 @@ def test_reset_does_not_bring_back_fake_data(real):
 
 
 def test_help_request_without_real_volunteers_is_an_honest_no_match(real):
-    r = anon().post("/help-requests", json={"type": "MEDICINE", "priority": "HIGH", "latitude": 12.9716, "longitude": 77.5946})
+    from tests.test_auth import user_client
+    r = user_client().post("/help-requests", json={"type": "MEDICINE", "priority": "HIGH", "latitude": 12.9716, "longitude": 77.5946})
     assert r.status_code == 201
     assert r.json()["match"]["matched"] is False and "volunteer" not in r.json()["match"]
     assert real.get("/matches").json() == []  # nothing invented
