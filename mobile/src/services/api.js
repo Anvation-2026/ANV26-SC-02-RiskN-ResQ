@@ -3,14 +3,13 @@
  * Communicates directly with the FastAPI real-data backend with bearer token session support.
  * Zero hardcoded synthetic demo data or fake coordinates in live operations.
  */
-import { API_BASE_URL, REQUEST_TIMEOUT_MS, FORCE_MOCK } from '../config/api';
+import { API_BASE_URL, REQUEST_TIMEOUT_MS } from '../config/api';
 import { getToken, notifyUnauthorized } from './session';
 
 let source = 'live';
 export const getSource = () => source;
 
 export async function http(path, options = {}) {
-  if (FORCE_MOCK) throw new Error('MOCK_MODE_ACTIVE');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   const token = getToken();
@@ -211,36 +210,6 @@ export async function getZoneAlerts() {
 
 export async function getRoadStatus() {
   return await http('/roads');
-}
-
-// ── 7. DEMO / DEVELOPMENT CONTROLS ──────────────────────────────────────
-export async function setDemoScenario(scenario) {
-  const flood = scenario === 'flood';
-  const rainfall = flood ? 85 : 5;
-  try {
-    if (!flood) await http('/reset', { method: 'POST' });
-    await http('/simulate-hazard', { method: 'POST', body: { hazard: 'FLOOD', rainfall } });
-    const roads = await http('/roads');
-    for (const r of roads) {
-      const shouldBlock = flood && r.id === roads[0].id;
-      if (shouldBlock && r.status !== 'BLOCKED') await http(`/roads/${r.id}/block`, { method: 'POST' });
-      if (!shouldBlock && r.status === 'BLOCKED') await http(`/roads/${r.id}/unblock`, { method: 'POST' });
-    }
-    source = 'live';
-  } catch (e) {
-    source = 'offline';
-  }
-}
-
-export async function syncRoadA(blocked) {
-  try {
-    const roads = await http('/roads');
-    if (roads && roads.length) {
-      await http(`/roads/${roads[0].id}/${blocked ? 'block' : 'unblock'}`, { method: 'POST' });
-    }
-  } catch (e) {
-    /* best effort */
-  }
 }
 
 // Uploads the chosen image to the backend as raw bytes. Resolves only when the server confirmed it stored the photo.

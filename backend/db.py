@@ -16,6 +16,11 @@ except ImportError:  # pragma: no cover
 BACKEND = "postgres" if DATABASE_URL.lower().startswith(("postgres://", "postgresql://")) else "sqlite"
 _PG_SCHEMA = None  # tests only: run inside an isolated PostgreSQL schema
 
+# DEMO DATA is opt-in. By default the database holds only real data (accounts, reports, requests) plus the
+# reference data the system needs (the road network and zone baselines). Set DEMO_DATA=true to also seed a sample
+# volunteer roster and a sample incident for presentations; they are marked as demo entries.
+DEMO_DATA = os.environ.get("DEMO_DATA", "").strip().lower() in ("1", "true", "yes", "on")
+
 # Every database error type the API should answer with a clean JSON 500.
 DB_ERRORS = (sqlite3.Error,) + ((psycopg.Error,) if psycopg else ())
 
@@ -437,16 +442,17 @@ def seed_state(c) -> None:
             ("Road C", json.dumps([[12.9352, 77.6245], [12.9500, 77.6100], [12.9716, 77.5946]])),
         ],
     )
-    c.execute(
-        "INSERT INTO incidents(type,latitude,longitude,description,severity,trust_score,status,zone,user_id,timestamp,updated_at)"
-        " VALUES('FLOOD',12.9720,77.5950,'Water logging near market',3,50,'REPORTED','Zone A',NULL,?,?)",
-        (t, t),
-    )
+    if DEMO_DATA:  # sample incident for presentations only
+        c.execute(
+            "INSERT INTO incidents(type,latitude,longitude,description,severity,trust_score,status,zone,user_id,timestamp,updated_at)"
+            " VALUES('FLOOD',12.9720,77.5950,'Water logging near market',3,50,'REPORTED','Zone A',NULL,?,?)",
+            (t, t),
+        )
 
 
 def seed_volunteers(c) -> None:
-    """Demo roster (no login). Real volunteer accounts are created by a Super Admin or self-registration."""
-    if c.execute("SELECT COUNT(*) FROM volunteers").fetchone()[0] == 0:
+    """Sample roster (no login) for presentations. Only with DEMO_DATA=true; real volunteers are created by a Super Admin."""
+    if DEMO_DATA and c.execute("SELECT COUNT(*) FROM volunteers").fetchone()[0] == 0:
         c.executemany(
             "INSERT INTO volunteers(name,skill,latitude,longitude,available,resources) VALUES(?,?,?,?,1,'[]')",
             [

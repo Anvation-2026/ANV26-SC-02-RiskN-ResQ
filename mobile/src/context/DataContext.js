@@ -112,7 +112,7 @@ export function DataProvider({ children }) {
       setBackendError(null);
     } catch (err) {
       setSource('offline');
-      setBackendError('Backend sync offline. Displaying cached telemetry.');
+      setBackendError('Unable to connect to the server.');
     } finally {
       busyRef.current = false;
       setLoading(false);

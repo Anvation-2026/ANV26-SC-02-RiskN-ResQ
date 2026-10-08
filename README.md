@@ -108,6 +108,14 @@ npx tsc --noEmit        # type check
 npx jest --runInBand    # 16 tests
 ```
 
+## Real data and demo data
+
+Normal operation uses **real data only**, stored in PostgreSQL: accounts, volunteers, incident reports (and their photos), help requests, matches, road status and alerts. Nothing is created automatically: a fresh database contains just the Super Admin from `.env`, the road network (reference data) and zone baselines. The app has **no built-in sample or mock data and no silent fallback**: if the server cannot be reached it says "Unable to connect to the server." and keeps showing the last data it received.
+
+Demo data is opt-in for presentations: start the backend with `DEMO_DATA=true` to also seed a sample volunteer roster (no login accounts) and one sample incident. Remove it again at any time with `python scripts/remove_demo_data.py` (real accounts and records are never touched). Admin-simulated rainfall is always labelled SIMULATED and its alerts start with "SIMULATED DRILL". The admin *Reset Demo* button clears incidents, help requests, matches and alerts and unblocks roads; accounts are kept.
+
+Anything saved by one device is visible to the others: for example a user registered on a phone shows up in the admin's People list, and an incident reported on a phone shows up in the admin's Incidents list, because every device talks to the same backend and PostgreSQL database.
+
 ## Database (PostgreSQL)
 
 The backend uses **PostgreSQL** when `DATABASE_URL` points at it, and a local SQLite file when it does not (quick demos, tests). The tables are created and the demo data seeded automatically on first start.

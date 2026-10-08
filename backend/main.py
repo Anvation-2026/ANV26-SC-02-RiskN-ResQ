@@ -39,12 +39,32 @@ from providers.weather.open_meteo import OpenMeteoProvider
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("risknresq")
 
-DATA_NOTICE = "Demo/simulated data for a hackathon prototype. Not a real-time hazard forecast or official warning."
+DATA_NOTICE = "Prototype system: readings can include admin-simulated rainfall (marked SIMULATED). Not a real-time hazard forecast or official warning."
 
 # Incident photos are stored on local disk (demo-safe; use object storage in production).
 PHOTO_DIR = Path(os.environ.get("RISKNRESQ_UPLOADS", Path(__file__).parent / "uploads"))
 MAX_PHOTO_BYTES = 5 * 1024 * 1024
 PHOTO_TYPES = {"jpg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
+
+
+# --- Photo storage: the ONLY three places that touch the disk. The database stores just the file name.
+# To move to cloud object storage later (S3, GCS...), replace these three functions; nothing else changes.
+def store_photo(name: str, data: bytes) -> None:
+    PHOTO_DIR.mkdir(parents=True, exist_ok=True)
+    (PHOTO_DIR / name).write_bytes(data)
+
+
+def photo_file(name: str):
+    """Path of a stored photo, or None if it is missing."""
+    path = PHOTO_DIR / name if name else None
+    return path if path and path.is_file() else None
+
+
+def purge_photos() -> None:
+    """Delete all incident photos (used by the demo reset, which also deletes the incidents)."""
+    if PHOTO_DIR.is_dir():
+        for f in PHOTO_DIR.glob("incident_*"):
+            f.unlink(missing_ok=True)
 
 IncidentType = Literal["FLOOD", "BLOCKED_ROAD", "FLOODED_ROAD", "WATERLOGGING", "FALLEN_TREE", "TRAFFIC_OBSTRUCTION", "EMERGENCY", "OTHER"]
 IncidentStatus = Literal["REPORTED", "VERIFIED", "REJECTED", "RESOLVED"]
@@ -521,9 +541,8 @@ async def upload_incident_photo(incident_id: int, request: Request, user: dict =
         r = _own_incident(c, incident_id, user)
         if r["photo_file"]:
             raise HTTPException(409, "This incident already has a photo.")
-        PHOTO_DIR.mkdir(parents=True, exist_ok=True)
         name = f"incident_{incident_id}_{secrets.token_hex(8)}.{ext}"  # server-chosen name: no client path ever used
-        (PHOTO_DIR / name).write_bytes(data)
+        store_photo(name, data)
         c.execute("UPDATE incidents SET photo_file=? WHERE id=?", (name, incident_id))
     return {"incident_id": incident_id, "stored": True, "content_type": PHOTO_TYPES[ext], "size_bytes": len(data)}
 
@@ -533,8 +552,8 @@ def get_incident_photo(incident_id: int, user: dict = Depends(auth.current_user)
     with db.session() as c:
         r = _own_incident(c, incident_id, user)
         name = r["photo_file"]
-    path = PHOTO_DIR / name if name else None
-    if not path or not path.is_file():
+    path = photo_file(name)
+    if not path:
         raise HTTPException(404, "This incident has no photo.")
     return FileResponse(path, media_type=PHOTO_TYPES.get(path.suffix.lstrip("."), "application/octet-stream"),
                         headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=300"})
@@ -1287,9 +1306,7 @@ def admin_set_user_active(user_id: int, body: UserActiveIn, admin: dict = Depend
 @app.post("/reset")
 def reset(_: dict = Depends(auth.require_admin)):
     db.reset_db()
-    if PHOTO_DIR.is_dir():
-        for f in PHOTO_DIR.glob("incident_*"):  # the incidents they belonged to are gone
-            f.unlink(missing_ok=True)
+    purge_photos()  # the incidents they belonged to are gone
     with db.session() as c:
         risks = refresh_all(c)
         alerts = c.execute("SELECT COUNT(*) FROM alerts WHERE active=1").fetchone()[0]

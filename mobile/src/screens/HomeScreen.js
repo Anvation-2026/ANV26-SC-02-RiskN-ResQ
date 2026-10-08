@@ -105,6 +105,7 @@ export default function HomeScreen({ navigate }) {
 
         {/* 2. REAL MULTI-FACTOR FLOOD RISK CARD */}
         <RiskCard
+          offline={source !== 'live'}
           risk={
             risk
               ? {

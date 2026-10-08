@@ -11,8 +11,8 @@ export default function ConnectionBanner() {
     <View style={styles.box}>
       <Feather name="wifi-off" size={15} color="#B45309" style={{ marginRight: 8 }} />
       <View style={{ flex: 1 }}>
-        <Text style={styles.t1}>Operating in offline/demo mode</Text>
-        <Text style={styles.t2}>Displaying latest cached geospatial telemetry.</Text>
+        <Text style={styles.t1}>Unable to connect to the server.</Text>
+        <Text style={styles.t2}>Showing the last data received. Reports and requests cannot be sent until you are back online.</Text>
       </View>
     </View>
   );

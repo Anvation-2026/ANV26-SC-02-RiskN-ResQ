@@ -2,7 +2,15 @@ import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { radius, riskColor } from '../theme';
 
-export default function RiskCard({ risk }) {
+export default function RiskCard({ risk, offline }) {
+  if (!risk && offline) {
+    return (
+      <View style={[styles.card, { backgroundColor: '#475569' }]}>
+        <Text style={styles.kicker}>FLOOD RISK</Text>
+        <Text style={styles.loading}>Unable to connect to the server.</Text>
+      </View>
+    );
+  }
   if (!risk) {
     return (
       <View style={[styles.card, { backgroundColor: '#475569' }]}>

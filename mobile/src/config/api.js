@@ -22,8 +22,6 @@ function detectBaseUrl() {
 
 export const API_BASE_URL = detectBaseUrl();
 
-export const FORCE_MOCK = false;          // Production: Live backend data
-export const DEMO_CONTROLS = false;        // Production: Hide demo controls
 export const POLL_MS = 15000;              // 15-second real-time telemetry sync
 export const REQUEST_TIMEOUT_MS = 6000;    // Network timeout
 export const USE_DEVICE_LOCATION = true;   // Production: Real GPS via expo-location

@@ -164,9 +164,6 @@ export function ResponseProvider({ children }) {
     refresh();
   }, [refresh]);
 
-  // Block/unblock stubs for backward-compatibility with UI
-  const block = useCallback(() => {}, []);
-  const unblock = useCallback(() => {}, []);
 
   // Adapt volunteers for map rendering
   const mappedVolunteers = useMemo(() => {
@@ -197,8 +194,6 @@ export function ResponseProvider({ children }) {
     roadDemo: blocked && blocked.length > 0 ? blocked[0] : null,
     requestRoute,
     requestResource,
-    block,
-    unblock,
     reset,
   };
 

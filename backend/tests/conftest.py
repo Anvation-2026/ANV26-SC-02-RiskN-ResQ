@@ -15,6 +15,7 @@ USE_POSTGRES = os.environ.get("RISKNRESQ_TEST_BACKEND") == "postgres"
 
 @pytest.fixture(autouse=True)
 def isolated_database(monkeypatch, tmp_path):
+    monkeypatch.setattr(db, "DEMO_DATA", True)  # most tests exercise the sample roster; real mode is tested explicitly
     if USE_POSTGRES:
         schema = "t_" + uuid.uuid4().hex[:12]
         db.create_schema(schema)
