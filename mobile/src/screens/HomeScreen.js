@@ -145,7 +145,7 @@ const styles = StyleSheet.create({
   },
   pillText: {
     color: '#FFFFFF',
-    fontSize: 10,
+    fontSize: 12,
     fontFamily: 'PlusJakartaSans_800ExtraBold',
     letterSpacing: 0.5,
   },

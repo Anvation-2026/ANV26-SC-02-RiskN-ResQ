@@ -37,7 +37,7 @@ const styles = StyleSheet.create({
   },
   t2: {
     fontFamily: 'PlusJakartaSans_500Medium',
-    fontSize: 11,
+    fontSize: 12,
     color: '#92400E',
     marginTop: 1,
   },

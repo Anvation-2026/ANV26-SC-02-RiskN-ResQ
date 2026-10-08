@@ -133,7 +133,7 @@ const styles = StyleSheet.create({
     padding: 14,
   },
   label: {
-    fontSize: 11,
+    fontSize: 12,
     fontFamily: 'PlusJakartaSans_800ExtraBold',
     letterSpacing: 0.8,
     color: colors.muted,

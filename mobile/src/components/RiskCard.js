@@ -69,7 +69,7 @@ const styles = StyleSheet.create({
   },
   kicker: {
     color: '#FFFFFF',
-    fontSize: 10,
+    fontSize: 12,
     fontFamily: 'PlusJakartaSans_800ExtraBold',
     letterSpacing: 0.8,
   },

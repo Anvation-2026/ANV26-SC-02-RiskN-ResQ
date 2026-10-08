@@ -279,7 +279,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   kicker: {
-    fontSize: 11,
+    fontSize: 12,
     fontFamily: 'PlusJakartaSans_800ExtraBold',
     letterSpacing: 1,
     color: colors.muted,
@@ -316,7 +316,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   altLabel: {
-    fontSize: 10,
+    fontSize: 12,
     fontFamily: 'PlusJakartaSans_700Bold',
     color: '#64748B',
     letterSpacing: 0.6,
@@ -341,7 +341,7 @@ const styles = StyleSheet.create({
     borderColor: '#E2E8F0',
   },
   sl: {
-    fontSize: 11,
+    fontSize: 12,
     color: colors.muted,
     fontFamily: 'PlusJakartaSans_600SemiBold',
   },
@@ -383,7 +383,7 @@ const styles = StyleSheet.create({
   },
   note: {
     fontFamily: 'PlusJakartaSans_500Medium',
-    fontSize: 11,
+    fontSize: 12,
     color: colors.muted,
     fontStyle: 'italic',
   },

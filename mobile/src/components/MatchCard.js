@@ -94,7 +94,7 @@ const styles = StyleSheet.create({
     borderColor: '#D1FAE5',
   },
   cl: {
-    fontSize: 10,
+    fontSize: 12,
     fontFamily: 'PlusJakartaSans_700Bold',
     color: colors.muted,
     letterSpacing: 0.5,
@@ -120,7 +120,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   scoreLabel: {
-    fontSize: 10,
+    fontSize: 12,
     fontFamily: 'PlusJakartaSans_800ExtraBold',
     color: colors.muted,
     letterSpacing: 0.6,
@@ -144,7 +144,7 @@ const styles = StyleSheet.create({
   },
   why: {
     fontFamily: 'PlusJakartaSans_500Medium',
-    fontSize: 11,
+    fontSize: 12,
     color: '#047857',
     marginTop: 6,
     lineHeight: 15,

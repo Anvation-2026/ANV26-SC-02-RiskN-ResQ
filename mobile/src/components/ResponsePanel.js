@@ -207,7 +207,7 @@ const styles = StyleSheet.create({
     ...shadow,
   },
   kicker: {
-    fontSize: 10,
+    fontSize: 12,
     fontFamily: 'PlusJakartaSans_800ExtraBold',
     letterSpacing: 0.8,
     color: colors.muted,
@@ -231,7 +231,7 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   pillText: {
-    fontSize: 10,
+    fontSize: 12,
     fontFamily: 'PlusJakartaSans_800ExtraBold',
     letterSpacing: 0.5,
   },
@@ -255,7 +255,7 @@ const styles = StyleSheet.create({
     borderColor: '#E2E8F0',
   },
   sl: {
-    fontSize: 10,
+    fontSize: 12,
     color: colors.muted,
     fontFamily: 'PlusJakartaSans_600SemiBold',
   },
@@ -286,7 +286,7 @@ const styles = StyleSheet.create({
     color: colors.HIGH,
   },
   note: {
-    fontSize: 11,
+    fontSize: 12,
     fontFamily: 'PlusJakartaSans_500Medium',
     color: colors.muted,
     fontStyle: 'italic',
@@ -320,7 +320,7 @@ const styles = StyleSheet.create({
     ...shadow,
   },
   demoTitle: {
-    fontSize: 11,
+    fontSize: 12,
     fontFamily: 'PlusJakartaSans_800ExtraBold',
     color: colors.text,
     letterSpacing: 0.8,
