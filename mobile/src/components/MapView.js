@@ -181,6 +181,10 @@ export default function MapView({
   onMarkerPress,
   basemap,
   tileOverlays = [],
+  routeSegments,
+  altRouteLine,
+  onPointPress,
+  pickedPoint,
 }) {
   const mapRef = useRef(null);
   const userCoord = useMemo(() => normalizeCoord(user), [user]);
@@ -344,6 +348,7 @@ export default function MapView({
         initialRegion={defaultRegion}
         // "satellite" uses the phone's own satellite imagery (Apple / Google: a mosaic, not live); NASA's daily image is a tile layer
         mapType={basemap && basemap.id === 'satellite' ? 'satellite' : 'standard'}
+        onPress={(e) => { const c = e && e.nativeEvent && e.nativeEvent.coordinate; if (c && onPointPress) onPointPress({ latitude: c.latitude, longitude: c.longitude }); }}
         showsUserLocation={false}
         showsCompass={true}
         showsScale={false}
@@ -395,7 +400,7 @@ export default function MapView({
           <RNPolygon key={`risk-${cell.cell}`} coordinates={cellCorners(cell, cellHalf).map(([latitude, longitude]) => ({ latitude, longitude }))}
             fillColor={`${RISK_COLOR[cell.risk_level]}${Math.round(RISK_FILL[cell.risk_level] * 255).toString(16).padStart(2, '0')}`}
             strokeColor={RISK_COLOR[cell.risk_level]} strokeWidth={cell.risk_level === 'LOW' ? 0 : 1} zIndex={0} tappable
-            onPress={() => onIntelPress && onIntelPress({ kind: 'cell', cell })} />
+            onPress={(e) => { const c = e && e.nativeEvent && e.nativeEvent.coordinate; if (onIntelPress) onIntelPress({ kind: 'cell', cell, point: c ? { latitude: c.latitude, longitude: c.longitude } : null }); }} />
         ))}
         {cellHalf && (Array.isArray(satelliteCells) ? satelliteCells : []).map((cell) => (
           <React.Fragment key={`sat-${cell.cell}`}>
@@ -489,23 +494,22 @@ export default function MapView({
           );
         })}
 
-        {/* 3. RECOMMENDED ALTERNATIVE ROUTE (GOOGLE ROUTES / OSRM) */}
+        {/* 3a. FASTEST ALTERNATIVE (grey, dashed) when it is not the recommended route */}
+        {Array.isArray(altRouteLine) && altRouteLine.length > 1 ? (
+          <RNPolyline coordinates={altRouteLine.map(normalizeCoord).filter(Boolean)} strokeColor="rgba(71,85,105,0.75)" strokeWidth={4} lineDashPattern={[8, 8]} zIndex={7} />
+        ) : null}
+        {/* 3b. RECOMMENDED LOWER-RISK ROUTE: each stretch in the flood-risk colour of the cells it crosses */}
         {activeRouteCoords && (
           <>
-            <RNPolyline
-              coordinates={activeRouteCoords}
-              strokeColor="#FFFFFF"
-              strokeWidth={8}
-              zIndex={8}
-            />
-            <RNPolyline
-              coordinates={activeRouteCoords}
-              strokeColor="#1565FF"
-              strokeWidth={5}
-              zIndex={9}
-            />
+            <RNPolyline coordinates={activeRouteCoords} strokeColor="#FFFFFF" strokeWidth={8} zIndex={8} />
+            {Array.isArray(routeSegments) && routeSegments.length ? routeSegments.filter((g) => g.points && g.points.length > 1).map((g, i) => (
+              <RNPolyline key={`seg-${i}`} coordinates={g.points.map(normalizeCoord).filter(Boolean)} strokeColor={g.level ? RISK_COLOR[g.level] : '#1565FF'} strokeWidth={5} zIndex={9} />
+            )) : <RNPolyline coordinates={activeRouteCoords} strokeColor="#1565FF" strokeWidth={5} zIndex={9} />}
           </>
         )}
+        {pickedPoint && normalizeCoord(pickedPoint) ? (
+          <RNMarker coordinate={normalizeCoord(pickedPoint)} pinColor="#7C3AED" zIndex={19} />
+        ) : null}
 
         {/* 4. BLOCKED ROAD BADGE MARKERS */}
         {validRoads

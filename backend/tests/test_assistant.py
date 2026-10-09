@@ -10,8 +10,15 @@ HERE = {"latitude": 12.9716, "longitude": 77.5946}
 
 
 @pytest.fixture(autouse=True)
-def _tables():
+def _tables(monkeypatch):
     db.init_db(reset=False)
+    import geocode
+
+    async def fake_search(q):  # no network in tests: a small gazetteer
+        known = {"koramangala": (12.9352, 77.6245), "whitefield": (12.9698, 77.7500)}
+        hit = known.get(q.lower())
+        return [{"name": q.title(), "latitude": hit[0], "longitude": hit[1], "inside_monitored_area": True}] if hit else []
+    monkeypatch.setattr(geocode, "search", fake_search)
 
 
 def test_anonymous_cannot_call_assistant(client):
@@ -258,3 +265,42 @@ def test_risk_sources_are_labelled_by_kind(client):
     body = u.post("/assistant/chat", json={"message": "What is my flood risk?", **HERE}).json()
     kinds = {s["title"]: s["category"] for s in body["sources"]}
     assert kinds["Open-Meteo"] == "REAL" and kinds["RiskN ResQ risk engine"] == "MODELLED"
+
+
+# ------------------------------------------------------------------ better answers: places, decisions, greetings
+def test_place_questions_are_answered_for_that_place(client):
+    refresh(r1=8.0, r3=20.0, r6=35.0, r24=70.0)
+    u = user_client("place@test.local")
+    body = u.post("/assistant/chat", json={"message": "What is the flood risk in Koramangala?"}).json()   # no GPS needed for a named place
+    assert "The flood risk at Koramangala is" in body["reply"] and body["risk_badge"] is not None
+    assert "** at **" not in body["reply"] and "at **Koramangala**" not in body["reply"].split("\n")[2]   # no bold nested inside bold
+    w = u.post("/assistant/chat", json={"message": "Is it raining in Whitefield?"}).json()
+    assert "WEATHER & RAINFALL MONITORING" in w["reply"] and "70.0 mm" in w["reply"]
+    nf = u.post("/assistant/chat", json={"message": "What is the flood risk in Atlantis?"}).json()
+    assert "could not find **Atlantis**" in nf["reply"]
+    plain = u.post("/assistant/chat", json={"message": "Explain my risk in simple words", **HERE}).json()
+    assert "could not find" not in plain["reply"]                                   # "simple words" is not a place
+
+
+def test_decision_questions_get_a_direct_answer_never_safe(client):
+    refresh(r1=8.0, r3=20.0, r6=35.0, r24=70.0)
+    u = user_client("decide@test.local")
+    body = u.post("/assistant/chat", json={"message": "Should I evacuate?", **HERE}).json()
+    assert body["reply"].startswith("🧭 **Flood risk where you are is") and "not an official order" in body["reply"]
+    assert " safe" not in body["reply"].lower().replace("unsafe", "")
+
+
+def test_greetings_and_unknown_questions_are_handled(client):
+    u = user_client("hello@test.local")
+    hi = u.post("/assistant/chat", json={"message": "hi"}).json()
+    assert "I'm RiskN AI" in hi["reply"] and hi["suggested_questions"]
+    odd = u.post("/assistant/chat", json={"message": "tell me a joke about cats", **HERE}).json()
+    assert "not sure what you mean" in odd["reply"]
+
+
+def test_flooding_nearby_is_never_confirmed(client):
+    refresh(r1=8.0, r24=70.0)
+    u = user_client("nearby@test.local")
+    u.post("/incidents", json={"type": "FLOOD", "latitude": 12.972, "longitude": 77.595, "description": "water on road"})
+    body = u.post("/assistant/chat", json={"message": "Is there flooding near me?", **HERE}).json()
+    assert "Reports within 5 km: **1**" in body["reply"] and "No source here confirms flooding on its own" in body["reply"]

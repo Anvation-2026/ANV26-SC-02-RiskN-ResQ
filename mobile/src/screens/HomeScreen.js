@@ -6,6 +6,7 @@ import WeatherCard from '../components/WeatherCard';
 import Header from '../components/Header';
 import RiskCard from '../components/RiskCard';
 import EmergencyPanel from '../components/EmergencyPanel';
+import LocationPicker from '../components/LocationPicker';
 import AlertCard from '../components/AlertCard';
 import ActionButton from '../components/ActionButton';
 import { symbols } from '../assets';
@@ -54,7 +55,9 @@ export default function HomeScreen({ navigate, openAI }) {
     lastUpdated,
     requestPermission,
     applyManualLocation,
+    retryLocation,
   } = useData();
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const [ticker, setTicker] = useState(0);
 
@@ -97,9 +100,9 @@ export default function HomeScreen({ navigate, openAI }) {
           </View>
         }
       >
-        <View style={styles.locationRow}>
+        <Pressable style={styles.locationRow} onPress={() => setPickerOpen(true)} accessibilityRole="button" accessibilityLabel={`Location: ${locationLabel}. Tap to check another place`}>
           <Feather name="map-pin" size={13} color="#38BDF8" style={{ marginRight: 5 }} />
-          <Text style={styles.locLabel}>Location:</Text>
+          <Text style={styles.locLabel}>{locationStatus === 'manual' ? 'Viewing:' : 'Location:'}</Text>
           <Text style={styles.loc} numberOfLines={1}>{locationLabel}</Text>
           {locationMeta ? (
             <View style={[styles.gpsChip, { backgroundColor: locationMeta.source === 'gps' ? 'rgba(22,163,74,0.25)' : 'rgba(148,163,184,0.25)' }]}
@@ -110,14 +113,27 @@ export default function HomeScreen({ navigate, openAI }) {
               </Text>
             </View>
           ) : null}
-        </View>
+          <View style={styles.changeChip}><Feather name="edit-2" size={10} color="#fff" /><Text style={styles.changeText}>CHANGE</Text></View>
+        </Pressable>
       </Header>
+      <LocationPicker visible={pickerOpen} onClose={() => setPickerOpen(false)} gpsAvailable
+        onPick={(p) => { setPickerOpen(false); applyManualLocation(p.latitude, p.longitude, p.label); }}
+        onUseGps={() => { setPickerOpen(false); retryLocation(); }} />
 
       <ScrollView
         contentContainerStyle={[styles.body, { paddingBottom: Math.max(insets.bottom, 16) + 85 }]}
         showsVerticalScrollIndicator={false}
       >
         <ConnectionBanner />
+
+        {/* viewing a chosen place: never confused with the person's own position */}
+        {locationStatus === 'manual' ? (
+          <View style={styles.viewingCard} accessibilityRole="summary">
+            <Feather name="eye" size={16} color="#6D28D9" />
+            <Text style={styles.viewingText}>Viewing <Text style={{ fontFamily: 'PlusJakartaSans_800ExtraBold' }}>{locationLabel}</Text>: not your GPS location. Risk, rain and routes below are for this place.</Text>
+            <Pressable onPress={retryLocation} style={styles.viewingBtn} accessibilityRole="button"><Text style={styles.viewingBtnText}>My location</Text></Pressable>
+          </View>
+        ) : null}
 
         {/* 1. LOCATION PERMISSION BANNER (IF DENIED) */}
         {isPermissionDenied && (
@@ -214,28 +230,30 @@ export default function HomeScreen({ navigate, openAI }) {
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                   <Text style={styles.aiSpotlightKicker}>AI EMERGENCY INTELLIGENCE</Text>
                   <View style={styles.aiChipBadge}>
-                    <Text style={styles.aiChipBadgeText}>LIVE SENSOR GROUNDED</Text>
+                    <Text style={styles.aiChipBadgeText}>ANSWERS FROM APP DATA</Text>
                   </View>
                 </View>
-                <Text style={styles.aiSpotlightTitle}>RiskN ResQ Intelligence Assistant</Text>
+                <Text style={styles.aiSpotlightTitle}>Ask RiskN AI</Text>
               </View>
             </View>
 
             <Text style={styles.aiSpotlightBody}>
-              Directly connected to Open-Meteo rainfall telemetry, Sentinel-1 radar water change, and road graphs. Ask any flood risk or evacuation question:
+              Answers use RiskN ResQ's current data for your location: flood risk, rainfall, satellite observations, roads and designated evacuation points. Tap a question:
             </Text>
 
             <View style={styles.aiChipsGrid}>
               {[
                 'What is my flood risk?',
                 'Why is my risk high?',
-                'Nearest designated shelter',
-                'Which roads are blocked?'
+                'Where is the nearest designated evacuation point?',
+                'Which roads should I avoid?'
               ].map((q, idx) => (
                 <Pressable
                   key={idx}
                   style={({ pressed }) => [styles.aiQuickChip, pressed && { opacity: 0.75 }]}
-                  onPress={() => (openAI ? openAI() : navigate('AI'))}
+                  onPress={() => (openAI ? openAI(q) : navigate('AI'))}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Ask RiskN AI: ${q}`}
                 >
                   <Feather name="zap" size={10} color="#22D3EE" style={{ marginRight: 4 }} />
                   <Text style={styles.aiQuickChipText} numberOfLines={1}>{q}</Text>
@@ -248,7 +266,7 @@ export default function HomeScreen({ navigate, openAI }) {
               onPress={() => (openAI ? openAI() : navigate('AI'))}
             >
               <Feather name="message-square" size={14} color="#FFFFFF" style={{ marginRight: 6 }} />
-              <Text style={styles.aiLaunchBtnText}>ASK EMERGENCY ASSISTANT</Text>
+              <Text style={styles.aiLaunchBtnText}>OPEN RISKN AI</Text>
               <Feather name="arrow-right" size={14} color="#FFFFFF" style={{ marginLeft: 6 }} />
             </Pressable>
           </View>
@@ -268,7 +286,7 @@ export default function HomeScreen({ navigate, openAI }) {
 
         {/* 3b. RAINFALL OBSERVATIONS (accumulation over the last 1 / 3 / 6 / 24 hours, from the backend's cached grid) */}
         <FadeIn delay={staggerDelay(3)}>
-          <SectionTitle>Recent rainfall</SectionTitle>
+          <SectionTitle color="#0891B2">Recent rainfall</SectionTitle>
           {weather && weather.source ? (
             <>
               <View style={{ flexDirection: 'row', gap: 10 }}>
@@ -288,7 +306,7 @@ export default function HomeScreen({ navigate, openAI }) {
 
         {/* 3c. NEARBY INCIDENTS (community reports within 5 km: supporting evidence, not confirmed flooding) */}
         <FadeIn delay={staggerDelay(4)}>
-          <SectionTitle>Nearby incident reports</SectionTitle>
+          <SectionTitle color="#D97706">Nearby incident reports</SectionTitle>
           {nearby.length === 0 ? (
             <StateView kind="empty" compact title="No active incidents have been reported in this area." message="Community reports appear here and support the environmental data; one report does not by itself mean flooding." icon="shield" />
           ) : nearby.map((i) => (
@@ -396,6 +414,12 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.bg,
   },
+  changeChip: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(56,189,248,0.25)', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2, marginLeft: 6 },
+  changeText: { color: '#fff', fontFamily: 'PlusJakartaSans_800ExtraBold', fontSize: 10, letterSpacing: 0.4 },
+  viewingCard: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#F5F3FF', borderWidth: 1, borderColor: '#DDD6FE', borderRadius: 16, padding: 12, marginBottom: 12 },
+  viewingText: { flex: 1, fontFamily: 'PlusJakartaSans_600SemiBold', fontSize: 13, color: '#4C1D95', lineHeight: 18 },
+  viewingBtn: { backgroundColor: '#6D28D9', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8 },
+  viewingBtnText: { color: '#fff', fontFamily: 'PlusJakartaSans_800ExtraBold', fontSize: 12 },
   gpsChip: { flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2, marginLeft: 8 },
   gpsDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#4ADE80' },
   gpsText: { color: '#FFFFFF', fontFamily: 'PlusJakartaSans_800ExtraBold', fontSize: 10, letterSpacing: 0.4 },

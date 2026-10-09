@@ -20,9 +20,13 @@ class CompositeRoutingProvider(RoutingProvider):
             return "Google Routes (with OSRM fallback)"
         return "OSRM"
 
+    supports_via = True
+
     async def compute_routes(
-        self, origin: RoutePoint, destination: RoutePoint
+        self, origin: RoutePoint, destination: RoutePoint, via: Optional[List[RoutePoint]] = None
     ) -> List[RouteCandidate]:
+        if via:  # detours through a waypoint (risk-aware alternatives) use OSRM
+            return await self.osrm_provider.compute_routes(origin, destination, via=via)
         if self.google_provider:
             try:
                 routes = await self.google_provider.compute_routes(origin, destination)

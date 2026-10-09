@@ -12,6 +12,8 @@ export default function Header({ title, subtitle, right, children, brand }) {
   return (
     <View style={[styles.wrap, { paddingTop }]}>
       <View style={styles.glow} pointerEvents="none" />
+      <View style={styles.glow2} pointerEvents="none" />
+      <View style={styles.edge} pointerEvents="none"><View style={[styles.edgePart, { backgroundColor: '#22D3EE' }]} /><View style={[styles.edgePart, { backgroundColor: '#6366F1' }]} /><View style={[styles.edgePart, { backgroundColor: '#A855F7' }]} /></View>
       <View style={styles.row}>
         {brand ? <Image source={symbols.logo} style={styles.mark} accessibilityLabel="RiskN ResQ" /> : null}
         <View style={{ flex: 1 }}>
@@ -26,6 +28,9 @@ export default function Header({ title, subtitle, right, children, brand }) {
 }
 
 const styles = StyleSheet.create({
+  glow2: { position: 'absolute', bottom: -90, left: -60, width: 200, height: 200, borderRadius: 100, backgroundColor: 'rgba(124,58,237,0.16)' },
+  edge: { position: 'absolute', left: 0, right: 0, bottom: 0, height: 3, flexDirection: 'row' },
+  edgePart: { flex: 1 },
   glow: { position: 'absolute', top: -70, right: -50, width: 190, height: 190, borderRadius: 95, backgroundColor: 'rgba(34,211,238,0.10)' },
   wrap: {
     overflow: 'hidden',

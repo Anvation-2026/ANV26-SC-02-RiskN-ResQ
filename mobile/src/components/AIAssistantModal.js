@@ -234,7 +234,7 @@ function AssistantActions({ actions, onTriggerAction }) {
   );
 }
 
-export default function AIAssistantModal({ visible, onClose, onNavigate }) {
+export default function AIAssistantModal({ visible, onClose, onNavigate, initialQuestion, onInitialQuestionSent }) {
   const insets = useSafeAreaInsets();
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const { user } = useAuth();
@@ -266,7 +266,7 @@ export default function AIAssistantModal({ visible, onClose, onNavigate }) {
 
   const widgetHeight = isWebDesktop
     ? Math.min(580, windowHeight - 90)
-    : Math.min(Math.round(windowHeight * 0.62), 620);
+    : Math.round(windowHeight * 0.86); // near full screen on a phone: answers need room to be read
 
   const bottomMargin = isWebDesktop
     ? Math.max(insets.bottom + 20, 24)
@@ -444,6 +444,13 @@ export default function AIAssistantModal({ visible, onClose, onNavigate }) {
     }
   }, [input, loading, messages, userLocation]);
 
+  // a question tapped outside the chat (the Home quick questions) is asked as soon as the chat is open
+  useEffect(() => {
+    if (!visible || !initialQuestion || loading) return undefined;
+    const t = setTimeout(() => { handleSend(initialQuestion); if (onInitialQuestionSent) onInitialQuestionSent(); }, 350);
+    return () => clearTimeout(t);
+  }, [visible, initialQuestion]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleAction = (act) => {
     handleSmoothClose();
     if (!onNavigate) return;
@@ -525,7 +532,7 @@ export default function AIAssistantModal({ visible, onClose, onNavigate }) {
                     <Pulse min={0.35} duration={1200}>
                       <View style={styles.greenBeacon} />
                     </Pulse>
-                    <Text style={styles.headerSubtitle}>Live Flood Intelligence</Text>
+                    <Text style={styles.headerSubtitle}>Answers from RiskN ResQ data</Text>
                   </View>
                 </View>
               </View>
@@ -566,24 +573,10 @@ export default function AIAssistantModal({ visible, onClose, onNavigate }) {
               </View>
             </View>
 
-            {/* Live Data Sources Telemetry Strip */}
+            {/* what the answers are based on (honest: not a list of "live" feeds) */}
             <View style={styles.telemetryBar}>
-              <View style={styles.telemetryItem}>
-                <View style={styles.telemetryDotGreen} />
-                <Text style={styles.telemetryText}>Open-Meteo</Text>
-              </View>
-              <View style={styles.telemetryItem}>
-                <View style={styles.telemetryDotCyan} />
-                <Text style={styles.telemetryText}>Sentinel-1 SAR</Text>
-              </View>
-              <View style={styles.telemetryItem}>
-                <View style={styles.telemetryDotAmber} />
-                <Text style={styles.telemetryText}>Copernicus DEM</Text>
-              </View>
-              <View style={styles.telemetryItem}>
-                <View style={styles.telemetryDotPurple} />
-                <Text style={styles.telemetryText}>GloFAS</Text>
-              </View>
+              <Feather name="database" size={11} color="#94A3B8" />
+              <Text style={styles.telemetryText}>Uses the app's current data for your location. Missing data is reported as missing.</Text>
             </View>
 
             {/* Scrollable Conversation Stream */}
@@ -638,7 +631,7 @@ export default function AIAssistantModal({ visible, onClose, onNavigate }) {
 
                         {/* Timestamp */}
                         <Text style={[styles.timestamp, isUser ? styles.userTimestamp : styles.assistantTimestamp]}>
-                          {m.timestamp} {!isUser && '• Grounded Telemetry'}
+                          {m.timestamp} {!isUser && (m.provider && m.provider !== 'grounded_engine' ? `• worded by ${m.provider}` : '• from app data')}
                         </Text>
                       </View>
                     </View>
@@ -819,7 +812,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(56,189,248,0.4)',
   },
   roleChipText: {
-    fontSize: 8,
+    fontSize: 10,
     fontFamily: 'PlusJakartaSans_800ExtraBold',
     color: '#93C5FD',
     letterSpacing: 0.4,
@@ -869,7 +862,8 @@ const styles = StyleSheet.create({
   telemetryBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-around',
+    justifyContent: 'flex-start',
+    gap: 6,
     paddingVertical: 4.5,
     paddingHorizontal: 8,
     backgroundColor: '#081224',
@@ -886,7 +880,8 @@ const styles = StyleSheet.create({
   telemetryDotAmber: { width: 5, height: 5, borderRadius: 2.5, backgroundColor: '#F59E0B' },
   telemetryDotPurple: { width: 5, height: 5, borderRadius: 2.5, backgroundColor: '#A855F7' },
   telemetryText: {
-    fontSize: 8.5,
+    flex: 1,
+    fontSize: 11,
     fontFamily: 'PlusJakartaSans_600SemiBold',
     color: '#94A3B8',
   },
@@ -1019,11 +1014,11 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
   badgeConfidenceText: {
-    fontSize: 9,
+    fontSize: 10,
     fontFamily: 'PlusJakartaSans_600SemiBold',
   },
   badgeFreshnessText: {
-    fontSize: 9,
+    fontSize: 10,
     fontFamily: 'PlusJakartaSans_500Medium',
     color: '#94A3B8',
   },
@@ -1039,7 +1034,7 @@ const styles = StyleSheet.create({
     marginBottom: 4.5,
   },
   sourcesTitle: {
-    fontSize: 8,
+    fontSize: 10,
     fontFamily: 'PlusJakartaSans_800ExtraBold',
     color: '#94A3B8',
     letterSpacing: 0.6,
@@ -1063,12 +1058,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   sourceName: {
-    fontSize: 9,
+    fontSize: 10,
     fontFamily: 'PlusJakartaSans_700Bold',
     color: '#E2E8F0',
   },
   sourceType: {
-    fontSize: 7.5,
+    fontSize: 10,
     fontFamily: 'PlusJakartaSans_500Medium',
     color: '#94A3B8',
     marginTop: 1,
@@ -1090,7 +1085,7 @@ const styles = StyleSheet.create({
     borderRadius: 2,
   },
   statusTagText: {
-    fontSize: 6.5,
+    fontSize: 10,
     fontFamily: 'PlusJakartaSans_800ExtraBold',
   },
   actionsWrap: {
@@ -1124,7 +1119,7 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
   timestamp: {
-    fontSize: 8.5,
+    fontSize: 10,
     fontFamily: 'PlusJakartaSans_500Medium',
     marginTop: 5,
   },

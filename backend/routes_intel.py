@@ -13,6 +13,7 @@ import auth
 import config
 import db
 import flood_intel
+import geocode
 import imagery
 import intel_jobs
 import ml_model
@@ -131,6 +132,25 @@ def satellite_imagery():
     """Tile layers for the map (satellite basemap, NASA daily imagery, NASA flood detection, Sentinel-1 radar water) with the
     real date each one shows. The phone loads the tiles straight from the providers' tile servers."""
     return imagery.catalogue()
+
+
+@router.get("/geocode/search")
+async def geocode_search(q: str = Query(..., min_length=2, max_length=120), user: dict = Depends(auth.current_user)):
+    """Find a place by name (OpenStreetMap Nominatim, cached and throttled) to check the flood risk or plan a route there."""
+    try:
+        return {"results": await geocode.search(q), "source": "OpenStreetMap Nominatim"}
+    except Exception:
+        raise HTTPException(503, "Place search is unavailable right now. You can tap a place on the map instead.")
+
+
+@router.get("/geocode/reverse")
+async def geocode_reverse(latitude: float = Query(..., ge=-90, le=90), longitude: float = Query(..., ge=-180, le=180),
+                          user: dict = Depends(auth.current_user)):
+    """A short place name for a position (for the location label on the web, where the browser has no geocoder)."""
+    try:
+        return {"name": await geocode.reverse(latitude, longitude)}
+    except Exception:
+        return {"name": None}
 
 
 @router.get("/terrain")

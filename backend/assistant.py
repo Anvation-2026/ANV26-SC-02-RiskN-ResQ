@@ -316,6 +316,60 @@ def build_grounded_response(query: str, ctx: Dict[str, Any], history: Optional[L
     if EMERGENCY_RE.search(q):
         return _emergency(ctx)
 
+    where = f"at **{ctx['place_name']}**" if ctx.get("place_name") else "where you are"
+    where_plain = f"at {ctx['place_name']}" if ctx.get("place_name") else "where you are"  # for sentences that are already bold
+
+    # 0b. greetings, thanks, "what can you do"
+    if re.fullmatch(r"(hi|hii+|hello|hey|namaste|good (morning|afternoon|evening)|yo)[!. ]*", q) or _has(q, "what can you do", "who are you", "help me use", "how do you work"):
+        return ChatResponse(reply=f"👋 **Hi{(', ' + ctx['name'].split()[0]) if ctx.get('name') else ''}! I'm {NAME}.**\n\nI answer from RiskN ResQ's own data, so I never guess. Try:\n"
+                                  "• *What is my flood risk?*\n• *What is the flood risk in Koramangala?*\n• *Should I evacuate?*\n• *Is it raining heavily near me?*\n"
+                                  "• *Where is the nearest designated evacuation point?*\n• *How is flood risk calculated?*\n\nIf anyone is in danger, call **112** first.",
+                            provider="grounded_engine", suggested_questions=get_suggested_questions_for_role(role))
+    if re.fullmatch(r"(thanks|thank you|thx|ok|okay|great|cool)[!. ]*", q):
+        return ChatResponse(reply="You're welcome. Ask me anything about the flood risk, rain, roads or evacuation points.", provider="grounded_engine",
+                            suggested_questions=get_suggested_questions_for_role(role))
+
+    # 0c. decision questions: evacuate? go out? travel? (direct answer from the current estimate; never "safe")
+    if _has(q, "should i evacuate", "do i need to evacuate", "should we evacuate", "need to leave", "should i leave", "is it safe", "safe to go", "safe to travel",
+            "can i go out", "can i travel", "should i go out", "should i travel", "ok to go", "okay to go", "can i drive"):
+        if not ctx.get("location_shared"):
+            return _need_location("whether to evacuate or travel")
+        if not asm or asm.get("insufficient"):
+            return ChatResponse(reply=f"⚠️ **I can't judge that right now:** insufficient data to estimate the flood risk {where}. Follow instructions from local authorities, and call **112** if you are in danger.",
+                                provider="grounded_engine", sources=_risk_sources(ctx))
+        lvl, sc = asm["risk_level"], asm["risk_score"]
+        advice = {
+            "LOW": "Current data does **not** show elevated flood risk, so there is no need to evacuate. Conditions can change quickly in heavy rain: keep notifications on.",
+            "MEDIUM": "No evacuation is indicated, but be careful: avoid underpasses and low-lying roads, and check the map before you travel.",
+            "HIGH": "Avoid travel through low-lying or potentially affected roads. Prepare to move to higher ground, keep your phone charged, and follow official instructions. If you must travel, use the lower-risk route in the app.",
+            "CRITICAL": "Move away from low-lying areas now if you can do so without crossing flood water, and follow official instructions. Use a designated evacuation point and the lower-risk route in the app. Call **112** if you are in danger.",
+        }[lvl]
+        drill = _drill_note(ctx)
+        return ChatResponse(reply=f"🧭 **Flood risk {where_plain} is {lvl} ({sc}/100).**\n\n{advice}\n\n*This is guidance from a prototype risk estimate, not an official order: local authorities decide evacuations.*{drill}",
+                            provider="grounded_engine", sources=_risk_sources(ctx),
+                            risk_badge=RiskBadge(level=lvl, score=sc, confidence=asm.get("confidence"), freshness=ago(asm.get("computed_at"))),
+                            actions=[ChatAction(label="Nearest evacuation point", action="open_evacuation"), ChatAction(label="Lower-risk route", action="open_map", params={"layer": "roads"})])
+
+    # 0d. "is there flooding near me?" (reports, hotspots, satellite: never "confirmed")
+    if _has(q, "flood near", "flooding near", "flooded near", "any flood", "is there flood", "is there any flood", "flood nearby", "flooding nearby",
+            "waterlogging near", "water logging near", "flood confirmed", "is this flood confirmed"):
+        if not ctx.get("location_shared"):
+            return _need_location("flooding near you")
+        inc = [i for i in ctx.get("incidents_nearby") or [] if i["type"] in ("FLOOD", "FLOODED_ROAD", "WATERLOGGING")]
+        sat = (ctx.get("satellite") or {}).get("cell_observation")
+        lines = [f"🌊 **Flooding {where_plain}: what the data shows**", ""]
+        lines.append(f"• Reports within 5 km: **{len(inc)}**" + (": " + "; ".join(f"{i['type'].replace('_', ' ').lower()} {i['distance_km']} km ({'verified' if i['status'] == 'VERIFIED' else 'not yet verified'})" for i in inc[:3]) if inc else " (none)."))
+        if sat:
+            lines.append(f"• Satellite (Sentinel-1, pass {str(sat['observed_at'])[:10]}): {'**water change observed** in this area' if sat['abnormal'] else 'no abnormal water gain in this area'}.")
+        else:
+            lines.append("• Satellite: no observation for this area yet.")
+        if asm and not asm.get("insufficient"):
+            lines.append(f"• Flood-risk estimate: **{asm['risk_level']}** ({asm['risk_score']}/100){', ' + asm['evidence_tier'].lower() if asm.get('evidence_tier') else ''}.")
+        lines += ["", "No source here confirms flooding on its own: reports are checked by administrators and satellites see water extent only on the pass date. "
+                      "If you can see flood water, report it in the app so others are warned."]
+        return ChatResponse(reply="\n".join(lines), provider="grounded_engine", sources=_risk_sources(ctx),
+                            actions=[ChatAction(label="Report flooding", action="open_report"), ChatAction(label="Map", action="open_map", params={"layer": "incidents"})])
+
     # 1. Admin overview (admins only)
     if _has(q, "admin", "provider", "system status", "system-wide", "unverified", "analytics", "fleet"):
         if role != "admin":
@@ -511,7 +565,12 @@ def build_grounded_response(query: str, ctx: Dict[str, Any], history: Optional[L
                                   f"Ask 'why is my risk at this level?' for every contributing signal.", provider="grounded_engine",
                             sources=[_src("Risk history", "Recorded estimates", "Current", None, "MODELLED")])
 
-    # 11. Default: the flood risk where the person is, with every reason
+    # 11. Default: the flood risk where the person is, with every reason (only when the question is about risk)
+    if not _has(q, "risk", "flood", "danger", "status", "situation", "level", "score", "explain", "why", "how is it", "what's happening", "whats happening"):
+        return ChatResponse(reply="🤔 I'm not sure what you mean. I can answer, from RiskN ResQ's data:\n"
+                                  "• the flood risk where you are or at a named place (*flood risk in Indiranagar?*)\n• rainfall now and forecast\n• satellite observations and when they were taken\n"
+                                  "• roads to avoid and the nearest designated evacuation point\n• your help request status\n• how the risk is calculated",
+                            provider="grounded_engine", suggested_questions=get_suggested_questions_for_role(role))
     if not located:
         return _need_location("your flood risk")
     if not asm or asm.get("insufficient"):
@@ -526,7 +585,7 @@ def build_grounded_response(query: str, ctx: Dict[str, Any], history: Optional[L
     missing = asm.get("missing") or []
     level = asm["risk_level"]
     near_alerts = [a for a in ctx.get("alerts") or [] if a.get("affected_zone") == ctx.get("zone") and not (a.get("message") or "").startswith("SIMULATED DRILL")]
-    reply = (f"🌧️ **CURRENT FLOOD RISK**\n\n• **Risk Level:** {level}\n• **Score:** {asm['risk_score']}/100\n"
+    reply = (f"🌧️ **CURRENT FLOOD RISK**\n\n**The flood risk {where_plain} is {level} ({asm['risk_score']}/100).** {asm.get('evidence_tier_note') or ''}\n\n• **Risk Level:** {level}\n• **Score:** {asm['risk_score']}/100\n"
              f"• **Probability:** {round(asm['probability'] * 100) if asm.get('probability') is not None else 'n/a'}% (prototype, uncalibrated)\n"
              f"• **Confidence:** {asm.get('confidence') or 'n/a'}\n• **Updated:** {ago(asm.get('computed_at'))}\n\n"
              f"**WHY THIS RISK:**\n{why}\n"
@@ -590,14 +649,50 @@ def llm_provider() -> Optional[str]:
     return None
 
 
+PLACE_RE = re.compile(r"\b(?:in|at|near|around|for)\s+(?!me\b|my\b|here\b|this\b|the area\b)([A-Za-z][A-Za-z0-9 .,'-]{2,60}?)\s*[?.!]*$", re.I)
+PLACE_TOPIC = ("risk", "flood", "rain", "weather", "safe", "danger", "water", "situation", "evacuat", "shelter", "road")
+
+
+def place_in_question(q: str) -> Optional[str]:
+    """'What is the flood risk in Koramangala?' -> 'Koramangala' (only for questions about risk, rain, roads or shelters)."""
+    if not any(t in q.lower() for t in PLACE_TOPIC):
+        return None
+    m = PLACE_RE.search(q.strip())
+    if not m:
+        return None
+    name = m.group(1).strip(" ,.")
+    low = name.lower()
+    not_places = ("simple", "detail", "english", "hindi", "kannada", "short", "general", "words", "terms", "now", "today", "tonight", "tomorrow",
+                  "the next", "next ", "hours", "minutes", "a flood", "flood", "an emergency", "emergency", "my ", "our ", "your ")
+    if low in ("bengaluru", "bangalore", "the city", "city", "india", "karnataka") or any(w in low for w in not_places):
+        return None
+    return name
+
+
 async def ask_assistant(user: dict, req: ChatRequest) -> ChatResponse:
     lat, lng, located = resolve_coordinates(user, req.latitude, req.longitude)
+    place = place_in_question(req.message)
+    place_name = None
+    if place and not EMERGENCY_RE.search(req.message):
+        import geocode
+        try:
+            hits = await geocode.search(place)
+        except Exception:
+            hits = None
+        if hits is None:
+            return ChatResponse(reply=f"🔎 I could not look up **{place}** right now (place search is unavailable). Tap the place on the map instead.", provider="grounded_engine")
+        inside = [h for h in hits if h["inside_monitored_area"]]
+        if not inside:
+            return ChatResponse(reply=f"🔎 I could not find **{place}** inside the area RiskN ResQ monitors (Bengaluru). Check the spelling or tap the place on the map.",
+                                provider="grounded_engine", suggested_questions=["What is my flood risk?", "Where is the nearest designated evacuation point?"])
+        lat, lng, located, place_name = inside[0]["latitude"], inside[0]["longitude"], True, inside[0]["name"]
     with db.session() as c:
         if not located and user.get("role") == "volunteer":  # a volunteer's own last shared position (it is their account's data)
             v = c.execute("SELECT latitude, longitude FROM volunteers WHERE user_id=?", (user["id"],)).fetchone()
             if v and v["latitude"] is not None:
                 lat, lng, located = float(v["latitude"]), float(v["longitude"]), True
         ctx = gather_grounded_context(c, user, lat, lng, req.message)
+    ctx["place_name"] = place_name
     grounded = build_grounded_response(req.message, ctx, req.history or [])
     grounded.context_summary = {"location_shared": located, "inside_monitored_area": ctx["inside_monitored_area"], "role": ctx["role"]}
     provider = llm_provider()

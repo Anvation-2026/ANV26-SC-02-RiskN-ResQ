@@ -21,6 +21,14 @@ export function formatCoordinates(lat, lng) {
 }
 
 export async function reverseGeocodeLocation(latitude, longitude) {
+  if (Platform.OS === 'web') {
+    try {
+      const { placeName } = require('./api'); // lazy: avoids a load-order cycle
+      const r = await placeName(latitude, longitude);
+      if (r && r.name) return r.name;
+    } catch (e) { /* fall back to coordinates */ }
+    return formatCoordinates(latitude, longitude);
+  }
   try {
     const results = await Location.reverseGeocodeAsync({ latitude, longitude });
     if (results && results.length > 0) {

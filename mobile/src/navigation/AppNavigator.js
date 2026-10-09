@@ -5,7 +5,7 @@ import Feather from '@expo/vector-icons/Feather';
 import { useData } from '../context/DataContext';
 import { useT } from '../i18n';
 import { ScreenFade, TabIcon } from '../components/motion';
-import { colors } from '../theme';
+import { colors, TAB_COLOR } from '../theme';
 import HomeScreen from '../screens/HomeScreen';
 import MapScreen from '../screens/MapScreen';
 import ReportScreen from '../screens/ReportScreen';
@@ -29,6 +29,8 @@ export default function AppNavigator() {
   const [active, setActiveRaw] = useState('Home');
   const [params, setParams] = useState({});
   const [aiVisible, setAiVisible] = useState(false);
+  const [aiQuestion, setAiQuestion] = useState(null); // a question tapped elsewhere (Home chips), asked as soon as the chat opens
+  const openAI = (q) => { setAiQuestion(typeof q === 'string' ? q : null); setAiVisible(true); };
   const insets = useSafeAreaInsets();
   const { alerts } = useData();
   const t18 = useT();
@@ -51,7 +53,7 @@ export default function AppNavigator() {
         {TABS.map(({ key, Screen }) => (
           <View key={key} style={[StyleSheet.absoluteFill, (active !== key || isTracking) && styles.hiddenScreen]}>
             <ScreenFade active={active === key && !isTracking}>
-              <Screen navigate={navigate} params={params[key]} openAI={() => setAiVisible(true)} />
+              <Screen navigate={navigate} params={params[key]} openAI={openAI} />
             </ScreenFade>
           </View>
         ))}
@@ -75,6 +77,8 @@ export default function AppNavigator() {
 
       <AIAssistantModal
         visible={aiVisible}
+        initialQuestion={aiQuestion}
+        onInitialQuestionSent={() => setAiQuestion(null)}
         onClose={() => setAiVisible(false)}
         onNavigate={navigate}
       />
@@ -82,7 +86,7 @@ export default function AppNavigator() {
       <View style={[styles.bar, { paddingBottom: bottomPadding }, isTracking && styles.hiddenScreen]}>
         {TABS.map((t) => {
           const isActive = active === t.key;
-          const activeColor = colors.primary;
+          const activeColor = TAB_COLOR[t.key] || colors.primary;
           const inactiveColor = '#94A3B8';
 
           return (
@@ -102,7 +106,7 @@ export default function AppNavigator() {
               <Text
                 style={[
                   styles.label,
-                  isActive ? styles.labelOn : styles.labelOff,
+                  isActive ? [styles.labelOn, { color: activeColor }] : styles.labelOff,
                 ]}
               >
                 {t18(`tab.${t.key}`)}

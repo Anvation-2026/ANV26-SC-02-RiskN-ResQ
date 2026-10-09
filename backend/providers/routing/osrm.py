@@ -1,5 +1,5 @@
 import logging
-from typing import List
+from typing import List, Optional
 import httpx
 from .base import RouteCandidate, RoutePoint, RoutingProvider
 
@@ -17,12 +17,15 @@ class OSRMProvider(RoutingProvider):
     def get_source_name(self) -> str:
         return "OSRM"
 
+    supports_via = True
+
     async def compute_routes(
-        self, origin: RoutePoint, destination: RoutePoint
+        self, origin: RoutePoint, destination: RoutePoint, via: Optional[List[RoutePoint]] = None
     ) -> List[RouteCandidate]:
-        # OSRM expects coordinates as {longitude},{latitude}
-        coords = f"{origin.longitude},{origin.latitude};{destination.longitude},{destination.latitude}"
-        url = f"http://router.project-osrm.org/route/v1/driving/{coords}?overview=full&geometries=geojson&alternatives=true"
+        # OSRM expects coordinates as {longitude},{latitude}; a via point forces a detour through it (used to route around danger)
+        pts = [origin, *(via or []), destination]
+        coords = ";".join(f"{p.longitude},{p.latitude}" for p in pts)
+        url = f"https://router.project-osrm.org/route/v1/driving/{coords}?overview=full&geometries=geojson&alternatives={'false' if via else 'true'}"
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             resp = await client.get(url)

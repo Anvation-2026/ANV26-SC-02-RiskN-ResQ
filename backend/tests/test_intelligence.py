@@ -1006,3 +1006,78 @@ def test_evidence_tiers_need_independent_signals():
     assert fi.evidence_tier("HIGH", {"rainfall", "terrain"}, False) == "HIGH FLOOD RISK"
     assert fi.evidence_tier("CRITICAL", {"rainfall", "terrain", "history"}, False) == "HIGH FLOOD RISK"   # no direct water evidence
     assert all("confirmed" not in n.lower() or "not" in n.lower() for n in fi.TIER_NOTE.values())
+
+
+def test_place_search_and_names_go_through_the_backend(monkeypatch):
+    import httpx
+    import geocode
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        assert "RiskN-ResQ" in request.headers["user-agent"]                       # Nominatim policy: identify the app
+        if request.url.path == "/search":
+            return httpx.Response(200, json=[
+                {"lat": "12.9352", "lon": "77.6245", "name": "Koramangala", "display_name": "Koramangala, Bengaluru", "address": {"city": "Bengaluru"}},
+                {"lat": "19.07", "lon": "72.87", "name": "Koramangala Lane", "display_name": "Mumbai", "address": {"city": "Mumbai"}}])
+        return httpx.Response(200, json={"name": "MG Road", "address": {"suburb": "Shivajinagar"}})
+
+    monkeypatch.setattr(geocode, "_transport", httpx.MockTransport(handler))
+    monkeypatch.setattr(geocode, "_cache", {})
+    monkeypatch.setattr(geocode, "_last", [0.0])
+    u = user_client("geo@test.local")
+    r = u.get("/geocode/search", params={"q": "Koramangala"}).json()["results"]
+    assert r[0]["name"] == "Koramangala, Bengaluru" and r[0]["inside_monitored_area"] is True and r[1]["inside_monitored_area"] is False
+    u.get("/geocode/search", params={"q": "koramangala"})                          # cached: no second request
+    assert calls.count("/search") == 1
+    assert u.get("/geocode/reverse", params={"latitude": 12.975, "longitude": 77.605}).json()["name"] == "MG Road, Shivajinagar"
+    assert anon().get("/geocode/search", params={"q": "x"}).status_code == 401
+
+
+class ViaRouting(FakeRouting):
+    """A router that can also detour through a waypoint (like OSRM)."""
+    supports_via = True
+
+    def __init__(self, cands, detour):
+        super().__init__(cands)
+        self.detour, self.vias = detour, []
+
+    async def compute_routes(self, o, d, via=None):
+        if via:
+            self.vias.append(via[0])
+            return [self.detour] if len(self.vias) == 1 else []
+        return self.cands
+
+
+def test_detours_are_requested_when_the_only_route_crosses_danger_and_compared_with_the_fastest(client):
+    import routing_service
+    refresh(r24=0.0)
+    rid = add_road("Flooded Ring Rd", [[12.91, 77.45], [12.91, 77.79]])
+    client.post(f"/roads/{rid}/block")
+    router = ViaRouting([cand(12.91, 600, name="direct")], cand(12.83, 800, name="around"))
+    with db.session() as c:
+        out = asyncio.run(routing_service.plan_route(c, router, RoutePoint(latitude=12.9, longitude=77.45), RoutePoint(latitude=12.9, longitude=77.79)))
+    assert len(router.vias) == 2                                                      # one waypoint on each side of the trip
+    assert out["summary"].startswith("Detour") and out["candidates_considered"] == 2
+    assert out["fastest"]["summary"] == "direct" and out["fastest"]["blocked_roads"] == ["Flooded Ring Rd"]
+    assert "+3 min compared with the fastest route" in out["comparison"] and "avoids Flooded Ring Rd" in out["comparison"]
+    assert out["risk_segments"] and all(len(s["points"]) > 1 for s in out["risk_segments"])
+    assert "safe" not in (out["reason"] + out["safetyNote"]).lower()
+
+
+def test_no_detours_when_there_are_enough_clear_routes(client):
+    import routing_service
+    refresh(r24=0.0)
+    router = ViaRouting([cand(12.91, 600), cand(12.87, 650), cand(12.83, 700)], cand(12.95, 900))
+    with db.session() as c:
+        asyncio.run(routing_service.plan_route(c, router, RoutePoint(latitude=12.9, longitude=77.45), RoutePoint(latitude=12.9, longitude=77.79)))
+    assert router.vias == []
+
+
+def test_route_risk_segments_follow_the_cell_levels(client):
+    import routing_service
+    refresh(r24=0.0)
+    set_scores(12.91, 80, "CRITICAL")
+    out = plan([cand(12.91, 600, name="through the flood")])
+    levels = {s["level"] for s in out["risk_segments"]}
+    assert "CRITICAL" in levels

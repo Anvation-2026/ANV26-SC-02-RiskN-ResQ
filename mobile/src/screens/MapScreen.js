@@ -17,11 +17,16 @@ import ErrorBoundary from '../components/ErrorBoundary';
 import { useResponse } from '../context/ResponseContext';
 import { useData } from '../context/DataContext';
 import { ago, rainLabel, RAIN_LABEL, RISK_COLOR, SAT_COLOR } from '../components/rain';
-import { getFloodRiskAt, getNearestEvacuation, getSatelliteImagery } from '../services/api';
+import { computeRoute, getFloodRiskAt, getNearestEvacuation, getSatelliteImagery } from '../services/api';
+import LocationPicker from '../components/LocationPicker';
 import { useT } from '../i18n';
 import { Sheet } from '../components/ui';
 import { ROUTE_NOTE } from '../services/copy';
 import { colors, radius, shadow } from '../theme';
+
+// each map layer switch lights up in its own colour (matching what it draws where possible)
+const LAYER_COLOR = { risk: '#4F46E5', rain: '#0891B2', satellite: '#7C3AED', hotspots: '#E11D48', roads: '#D97706', terrain: '#92400E', incidents: '#EA580C',
+  hospitals: '#DC2626', shelters: '#059669', volunteers: '#2563EB', nasa_flood: '#1D4ED8', radar_water: '#0E7490' };
 
 const ROAD_STATE = { OPEN: ['Open', '#16A34A'], POTENTIALLY_AFFECTED: ['Potentially affected', '#EA580C'], REPORTED_BLOCKED: ['Reported blocked', '#DC2626'], VERIFIED_BLOCKED: ['Verified blocked', '#991B1B'] };
 
@@ -33,7 +38,7 @@ const MODES = [
 export default function MapScreen({ params }) {
   const insets = useSafeAreaInsets();
   const { height: screenHeight } = useWindowDimensions();
-  const { userLocation, risk, blocked, roads, alternative, incidents, locationLabel, weatherMonitor, places, intel } = useData();
+  const { userLocation, risk, blocked, roads, alternative, incidents, locationLabel, weatherMonitor, places, intel, applyManualLocation } = useData();
   const [layers, setLayers] = useState({ risk: true, rain: true, satellite: true, hotspots: true, roads: true, terrain: false, incidents: true, hospitals: true, shelters: true, volunteers: true, nasa_flood: false, radar_water: false });
   const [basemap, setBasemap] = useState('map'); // 'map' (street) | 'satellite' (photo mosaic, not live) | 'today' (NASA daily image)
   const [imagery, setImagery] = useState(null);
@@ -45,6 +50,10 @@ export default function MapScreen({ params }) {
   const [evacBusy, setEvacBusy] = useState(false);
   const [rainPick, setRainPick] = useState(null);
   const [placePick, setPlacePick] = useState(null);
+  const [pickedPoint, setPickedPoint] = useState(null); // a spot tapped on the map
+  const [routeRes, setRouteRes] = useState(null);       // a lower-risk route to a chosen place
+  const [routeBusy, setRouteBusy] = useState(false);
+  const [destPicker, setDestPicker] = useState(false);
   const t = useT();
   const [mode, setMode] = useState('live');
   const R = useResponse();
@@ -78,18 +87,37 @@ export default function MapScreen({ params }) {
   const sheetOpen = !!(rainPick || placePick || intelPick || evac || roadPick || incidentPick);
   const closeSheet = () => { setRainPick(null); setPlacePick(null); setIntelPick(null); setEvac(null); setRoadPick(null); setIncidentPick(null); };
   const only = (fn) => (x) => { closeSheet(); fn(x); }; // one object in the sheet at a time
-  const INTEL_TITLE = { cell: 'Flood risk estimate', satellite: 'Satellite water-change observation', hotspot: 'Potential flood hotspot', terrain: 'Terrain susceptibility' };
+  const INTEL_TITLE = { cell: 'Flood risk at this spot', satellite: 'Satellite water-change observation', hotspot: 'Potential flood hotspot', terrain: 'Terrain susceptibility' };
   const sheetTitle = evac ? 'Nearest designated evacuation point' : intelPick ? INTEL_TITLE[intelPick.kind]
     : placePick ? (placePick.kind === 'HOSPITAL' ? 'Hospital' : 'Designated shelter / assembly point') : roadPick ? 'Road status' : incidentPick ? 'Incident report' : 'Rainfall observation';
   const visiblePlaces = (places || []).filter((p) => (p.kind === 'HOSPITAL' ? layers.hospitals : layers.shelters));
   const sheetTone = intelPick && intelPick.kind === 'cell' && cellDetail && cellDetail.risk_level ? RISK_COLOR[cellDetail.risk_level] : intelPick && intelPick.kind === 'hotspot' ? RISK_COLOR[intelPick.hotspot.risk_level] : undefined;
   const pickIntel = (p) => {
     closeSheet(); setIntelPick(p); setCellDetail(null);
-    if (p.kind === 'cell') getFloodRiskAt(p.cell.latitude, p.cell.longitude).then(setCellDetail).catch(() => setCellDetail({ error: true }));
+    if (p.kind === 'cell') {
+      // the exact spot tapped (not just the cell centre), so the answer and the actions are for that place
+      const pt = p.point || { latitude: p.cell.latitude, longitude: p.cell.longitude };
+      setPickedPoint(pt);
+      getFloodRiskAt(pt.latitude, pt.longitude).then(setCellDetail).catch(() => setCellDetail({ error: true }));
+    }
+  };
+  const pickPoint = (pt) => pickIntel({ kind: 'cell', cell: null, point: pt }); // a tap outside the risk cells
+  // a lower-risk route from where you are to any place (tapped on the map or searched)
+  const planRoute = async (dest, label) => {
+    if (!userLocation || !dest) return;
+    closeSheet(); setRouteBusy(true); setRouteRes(null);
+    try {
+      const r = await computeRoute(userLocation, dest);
+      setRouteRes({ ...r, destLabel: label || 'the selected place' });
+    } catch (e) {
+      setRouteRes({ success: false, destLabel: label, message: e && e.detail ? e.detail : 'The route could not be calculated. Check your connection.' });
+    }
+    setRouteBusy(false);
   };
   const findEvac = async () => {
     if (!userLocation) return;
     setEvacBusy(true);
+    setRouteRes(null);
     try { setEvac(await getNearestEvacuation(userLocation.latitude, userLocation.longitude)); } catch (e) { setEvac({ points: [], message: 'Could not look up evacuation points. Check your connection.' }); }
     setEvacBusy(false);
   };
@@ -202,7 +230,11 @@ export default function MapScreen({ params }) {
               alternative={alternative}
               incidents={layers.incidents ? incidents : []}
               height={mapHeight}
-              routeLine={evac && evac.route && evac.route.success ? evac.route.polyline : scenario.routeLine}
+              routeLine={routeRes && routeRes.success ? routeRes.polyline : evac && evac.route && evac.route.success ? evac.route.polyline : scenario.routeLine}
+              routeSegments={routeRes && routeRes.success ? routeRes.risk_segments : evac && evac.route && evac.route.success ? evac.route.risk_segments : undefined}
+              altRouteLine={routeRes && routeRes.success && routeRes.fastest ? routeRes.fastest.polyline : evac && evac.route && evac.route.fastest ? evac.route.fastest.polyline : undefined}
+              pickedPoint={pickedPoint}
+              onPointPress={pickPoint}
               markers={(() => {
                 const base = layers.volunteers ? scenario.markers : scenario.markers.filter((m) => m.id === 'dest' || m.highlight); // a matched responder stays visible
                 return evac && evac.points && evac.points[0] ? [...base, { id: 'dest', latitude: evac.points[0].latitude, longitude: evac.points[0].longitude, label: `★ ${evac.points[0].name}`, color: colors.route, highlight: true }] : base;
@@ -260,7 +292,7 @@ export default function MapScreen({ params }) {
               ['hospitals', t('layer.hospitals'), 'plus-square'], ['shelters', t('layer.shelters'), 'home'], ['volunteers', t('layer.volunteers'), 'users'],
               ['nasa_flood', t('layer.nasaFlood'), 'droplet'], ['radar_water', t('layer.radarWater'), 'activity']].map(([k, label, icon]) => (
               <Pressable key={k} onPress={() => toggle(k)} accessibilityRole="switch" accessibilityState={{ checked: layers[k] }} aria-checked={!!layers[k]} accessibilityLabel={label}
-                style={[styles.layerChip, layers[k] && styles.layerChipOn]}>
+                style={[styles.layerChip, layers[k] && styles.layerChipOn, layers[k] && { backgroundColor: LAYER_COLOR[k], borderColor: LAYER_COLOR[k] }]}>
                 <Feather name={layers[k] ? 'check-square' : 'square'} size={12} color={layers[k] ? '#fff' : '#64748B'} />
                 <Feather name={icon} size={12} color={layers[k] ? '#fff' : '#64748B'} />
                 <Text style={[styles.layerText, layers[k] && { color: '#fff' }]}>{label}</Text>
@@ -274,12 +306,19 @@ export default function MapScreen({ params }) {
           </Text>
         ) : null}
         <MapLegend />
-        <View style={{ marginTop: 10 }}>
+        <View style={styles.actionRow}>
           <Pressable onPress={findEvac} disabled={evacBusy || !userLocation} accessibilityRole="button" style={styles.evacBtn}>
             <Feather name="navigation" size={14} color="#fff" />
             <Text style={styles.evacText}>{evacBusy ? 'Looking…' : t('evac.button')}</Text>
           </Pressable>
+          <Pressable onPress={() => setDestPicker(true)} disabled={!userLocation || routeBusy} accessibilityRole="button" style={[styles.evacBtn, { backgroundColor: '#7C3AED' }]}>
+            <Feather name="map" size={14} color="#fff" />
+            <Text style={styles.evacText}>{routeBusy ? 'Planning…' : 'Route to a place'}</Text>
+          </Pressable>
         </View>
+        <Text style={styles.tapHint}>Tip: tap any spot on the map to see its flood risk, view it on Home or route there.</Text>
+        <LocationPicker visible={destPicker} onClose={() => setDestPicker(false)} onPick={(p) => { setDestPicker(false); planRoute(p, p.label); }} />
+        {routeRes ? <RouteCard route={routeRes} onClear={() => { setRouteRes(null); setPickedPoint(null); }} /> : null}
         <Sheet visible={sheetOpen} onClose={closeSheet} title={sheetTitle} tone={sheetTone}>
         {rainPick && (
           <View style={styles.rainCard}>
@@ -329,6 +368,18 @@ export default function MapScreen({ params }) {
                 <Text style={styles.rainNote}>{cellDetail.model}. Area-level estimate (about 9 km cell), updated {ago(cellDetail.computed_at)}.</Text>
               </>
             )) : <Text style={styles.rainLine}>Loading…</Text>)}
+            {intelPick.kind === 'cell' && pickedPoint ? (
+              <View style={styles.sheetActions}>
+                <Pressable style={[styles.sheetBtn, { backgroundColor: '#6D28D9' }]} accessibilityRole="button"
+                  onPress={() => { const pt = pickedPoint; closeSheet(); applyManualLocation(pt.latitude, pt.longitude, null); }}>
+                  <Feather name="home" size={14} color="#fff" /><Text style={styles.sheetBtnText}>View this place on Home</Text>
+                </Pressable>
+                <Pressable style={[styles.sheetBtn, { backgroundColor: colors.primary }]} accessibilityRole="button" disabled={!userLocation}
+                  onPress={() => planRoute(pickedPoint, `${pickedPoint.latitude.toFixed(4)}, ${pickedPoint.longitude.toFixed(4)}`)}>
+                  <Feather name="navigation" size={14} color="#fff" /><Text style={styles.sheetBtnText}>Lower-risk route here</Text>
+                </Pressable>
+              </View>
+            ) : null}
             {intelPick.kind === 'satellite' && (
               <>
                 <Text style={styles.rainLine}>Classification: <Text style={styles.rainBold}>{intelPick.cell.abnormal ? 'Water change observed (abnormal gain)' : 'No abnormal change'}</Text></Text>
@@ -503,6 +554,11 @@ const styles = StyleSheet.create({
   layerChipOn: { backgroundColor: colors.primary, borderColor: colors.primary },
   layerText: { fontFamily: 'PlusJakartaSans_700Bold', fontSize: 12, color: '#475569' },
   dataNote: { fontFamily: 'PlusJakartaSans_600SemiBold', fontSize: 11, color: '#B45309', marginTop: 8, lineHeight: 16 },
+  actionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
+  tapHint: { fontFamily: 'PlusJakartaSans_500Medium', fontSize: 12, color: colors.muted, marginTop: 8 },
+  sheetActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
+  sheetBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 12, paddingHorizontal: 12, minHeight: 44, flexGrow: 1, justifyContent: 'center' },
+  sheetBtnText: { color: '#fff', fontFamily: 'PlusJakartaSans_800ExtraBold', fontSize: 13 },
   evacBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, alignSelf: 'flex-start', backgroundColor: colors.navy, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10 },
   evacText: { color: '#fff', fontFamily: 'PlusJakartaSans_700Bold', fontSize: 13 },
   placesToggle: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10, alignSelf: 'flex-start', paddingVertical: 6 },
@@ -691,4 +747,74 @@ const styles = StyleSheet.create({
     color: colors.muted,
     fontStyle: 'italic',
   },
+});
+
+
+// A planned lower-risk route: distance, time, flood-risk exposure, what it avoids and how it compares with the fastest route.
+const RISK_WORD = { LOW: 'Low', MEDIUM: 'Medium', HIGH: 'High', CRITICAL: 'Critical' };
+function RouteCard({ route, onClear }) {
+  if (!route.success) {
+    return (
+      <View style={rc.card}>
+        <Text style={rc.title}>No route to {route.destLabel || 'that place'}</Text>
+        <Text style={rc.line}>{route.message || 'No traversable route was found.'}</Text>
+        <Pressable onPress={onClear} style={rc.clear} accessibilityRole="button"><Text style={rc.clearText}>Close</Text></Pressable>
+      </View>
+    );
+  }
+  const ri = route.risk_information || {};
+  const levels = [...new Set((route.risk_segments || []).map((g) => g.level).filter(Boolean))];
+  const f = route.fastest;
+  return (
+    <View style={rc.card}>
+      <View style={rc.head}>
+        <Feather name="navigation" size={16} color={colors.primary} />
+        <Text style={rc.title} numberOfLines={2}>Lower-risk route to {route.destLabel}</Text>
+      </View>
+      <View style={rc.stats}>
+        <View style={rc.stat}><Text style={rc.statVal}>{route.distanceKm} km</Text><Text style={rc.statLbl}>DISTANCE</Text></View>
+        <View style={rc.stat}><Text style={rc.statVal}>{route.etaMinutes} min</Text><Text style={rc.statLbl}>EST. TIME</Text></View>
+        <View style={rc.stat}><Text style={[rc.statVal, ri.max_risk_score != null && { color: RISK_COLOR[ri.max_risk_score >= 75 ? 'CRITICAL' : ri.max_risk_score >= 50 ? 'HIGH' : ri.max_risk_score >= 25 ? 'MEDIUM' : 'LOW'] }]}>{ri.mean_risk_score != null ? `${ri.mean_risk_score}` : 'n/a'}</Text><Text style={rc.statLbl}>AVG RISK /100</Text></View>
+      </View>
+      {levels.length ? (
+        <View style={rc.legend}>
+          <Text style={rc.legendLbl}>Route colours:</Text>
+          {levels.map((l) => <View key={l} style={rc.legendItem}><View style={[rc.swatch, { backgroundColor: RISK_COLOR[l] }]} /><Text style={rc.legendText}>{RISK_WORD[l]} risk</Text></View>)}
+        </View>
+      ) : null}
+      <Text style={rc.line}>{route.reason}</Text>
+      {(route.avoided_roads || []).length ? <Text style={rc.line}>Avoids: {route.avoided_roads.join(', ')}</Text> : null}
+      {(ri.potentially_affected_roads_on_route || []).length ? <Text style={[rc.line, { color: '#B45309' }]}>Passes potentially affected: {ri.potentially_affected_roads_on_route.join(', ')}</Text> : null}
+      {f ? (
+        <View style={rc.alt}>
+          <View style={rc.altDash} />
+          <Text style={rc.altText}>Fastest route (grey dashed): {f.distance_km} km · {f.eta_minutes} min{f.mean_risk_score != null ? ` · avg risk ${f.mean_risk_score}/100` : ''}{f.blocked_roads.length ? ` · crosses ${f.blocked_roads.join(', ')}` : ''}{f.incidents_on_route ? ` · ${f.incidents_on_route} reported incident(s)` : ''}</Text>
+        </View>
+      ) : <Text style={rc.line}>This is also the fastest of {route.candidates_considered || 1} route(s) checked.</Text>}
+      <Text style={rc.note}>{route.safetyNote} Risk colours are area-level estimates (about 9 km cells), not road observations.</Text>
+      <Pressable onPress={onClear} style={rc.clear} accessibilityRole="button"><Text style={rc.clearText}>Clear route</Text></Pressable>
+    </View>
+  );
+}
+
+const rc = StyleSheet.create({
+  card: { backgroundColor: colors.card, borderRadius: radius.card, padding: 14, marginTop: 10, borderWidth: 1, borderColor: '#C7D2FE', ...shadow },
+  head: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  title: { flex: 1, fontFamily: 'PlusJakartaSans_800ExtraBold', fontSize: 15, color: colors.text },
+  stats: { flexDirection: 'row', gap: 8, marginTop: 12 },
+  stat: { flex: 1, backgroundColor: '#EEF2FF', borderRadius: 12, padding: 10 },
+  statVal: { fontFamily: 'PlusJakartaSans_800ExtraBold', fontSize: 17, color: colors.text },
+  statLbl: { fontFamily: 'PlusJakartaSans_700Bold', fontSize: 10, color: colors.muted, letterSpacing: 0.4, marginTop: 2 },
+  legend: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: 10 },
+  legendLbl: { fontFamily: 'PlusJakartaSans_700Bold', fontSize: 12, color: colors.muted },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  swatch: { width: 14, height: 6, borderRadius: 3 },
+  legendText: { fontFamily: 'PlusJakartaSans_600SemiBold', fontSize: 12, color: colors.text },
+  line: { fontFamily: 'PlusJakartaSans_500Medium', fontSize: 13, color: colors.text, marginTop: 8, lineHeight: 19 },
+  alt: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10, backgroundColor: '#F8FAFC', borderRadius: 10, padding: 10 },
+  altDash: { width: 22, height: 0, borderTopWidth: 3, borderStyle: 'dashed', borderColor: '#475569' },
+  altText: { flex: 1, fontFamily: 'PlusJakartaSans_600SemiBold', fontSize: 12, color: '#334155', lineHeight: 17 },
+  note: { fontFamily: 'PlusJakartaSans_500Medium', fontSize: 11, color: colors.muted, marginTop: 10, lineHeight: 16 },
+  clear: { alignSelf: 'flex-start', marginTop: 10, paddingVertical: 6 },
+  clearText: { fontFamily: 'PlusJakartaSans_800ExtraBold', fontSize: 13, color: colors.primary },
 });

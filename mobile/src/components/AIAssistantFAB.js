@@ -47,8 +47,11 @@ function RadarPulse({ children }) {
   const opacity2 = wave2.interpolate({ inputRange: [0, 0.4, 1], outputRange: [0.55, 0.25, 0] });
 
   return (
-    <View style={styles.pulseContainer} pointerEvents="none">
+    // box-none: the decorative rings ignore touches, but the button inside them must still receive them
+    // (this was "none", which made the whole RiskN AI button untappable)
+    <View style={styles.pulseContainer} pointerEvents="box-none">
       <Animated.View
+        pointerEvents="none"
         style={[
           styles.radarRing,
           {
@@ -58,6 +61,7 @@ function RadarPulse({ children }) {
         ]}
       />
       <Animated.View
+        pointerEvents="none"
         style={[
           styles.radarRing,
           {

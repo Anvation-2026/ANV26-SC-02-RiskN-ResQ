@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Feather from '@expo/vector-icons/Feather';
 import { ScreenFade, TabIcon } from '../components/motion';
-import { colors, fonts } from '../theme';
+import { colors, fonts, TAB_COLOR } from '../theme';
 import AIAssistantModal from '../components/AIAssistantModal';
 import AIAssistantFAB from '../components/AIAssistantFAB';
 
@@ -48,10 +48,10 @@ export default function TabShell({ tabs, badges = {}, onTabChange }) {
       <View style={[styles.bar, { paddingBottom: bottomPadding }]}>
         {tabs.map((t) => (
           <Pressable key={t.key} style={styles.tab} onPress={() => setActive(t.key)} hitSlop={6} accessibilityRole="tab" accessibilityLabel={t.label} accessibilityState={{ selected: active === t.key }} aria-selected={active === t.key}>
-            <TabIcon active={active === t.key} color={colors.primary} badge={badges[t.key] || 0} compact={tabs.length > 6}>
-              <Feather name={t.icon} size={20} color={active === t.key ? colors.primary : '#94A3B8'} />
+            <TabIcon active={active === t.key} color={TAB_COLOR[t.key] || colors.primary} badge={badges[t.key] || 0} compact={tabs.length > 6}>
+              <Feather name={t.icon} size={20} color={active === t.key ? (TAB_COLOR[t.key] || colors.primary) : '#94A3B8'} />
             </TabIcon>
-            <Text style={[styles.label, active === t.key && { color: colors.primary, fontFamily: fonts.bold }]}>{t.label}</Text>
+            <Text style={[styles.label, active === t.key && { color: TAB_COLOR[t.key] || colors.primary, fontFamily: fonts.bold }]}>{t.label}</Text>
           </Pressable>
         ))}
       </View>

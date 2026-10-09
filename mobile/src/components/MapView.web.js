@@ -30,8 +30,10 @@ export default function MapView({
   zones: rawZones, routeLine: rawRoute, markers: rawMarkers, user: rawUser, labelBlockedOnly = false,
   rainAreas = [], onRainPress, places = [], onPlacePress,
   riskCells = [], satelliteCells = [], hotspots = [], terrainCells = [], cellHalf, onIntelPress, onRoadPress, onIncidentPress, onMarkerPress,
-  basemap, tileOverlays = [],
+  basemap, tileOverlays = [], routeSegments, altRouteLine, onPointPress, pickedPoint,
 }) {
+  const pointCb = useRef(onPointPress);
+  pointCb.current = onPointPress;
   const roadCb = useRef(onRoadPress);
   roadCb.current = onRoadPress;
   const incCb = useRef(onIncidentPress);
@@ -62,6 +64,8 @@ export default function MapView({
     const map = L.map(el.current, { zoomControl: true, attributionControl: true, zoomAnimation: false, fadeAnimation: false, markerZoomAnimation: false }).setView([(user || DEFAULT_POINT).latitude, (user || DEFAULT_POINT).longitude], 14);
     state.current.base = L.tileLayer(TILES, { maxZoom: 19, attribution: ATTRIBUTION }).addTo(map);
     state.current.map = map;
+    // a tap anywhere outside the risk cells picks that point (to check its risk or route there)
+    map.on('click', (e) => { if (pointCb.current) pointCb.current({ latitude: e.latlng.lat, longitude: e.latlng.lng }); });
     // white "not water" pixels of radar water tiles disappear when multiplied over the map below
     if (typeof document !== 'undefined' && !document.getElementById('rr-tile-css')) {
       const st = document.createElement('style'); st.id = 'rr-tile-css'; st.textContent = '.rr-multiply{mix-blend-mode:multiply}'; document.head.appendChild(st);
@@ -142,7 +146,7 @@ export default function MapView({
         if (mine || cell.risk_level !== 'LOW') bounds.push([cell.latitude - cellHalf.lat, cell.longitude - cellHalf.lng], [cell.latitude + cellHalf.lat, cell.longitude + cellHalf.lng]);
         const col = RISK_COLOR[cell.risk_level];
         L.polygon(cellCorners(cell, cellHalf), { color: col, weight: cell.risk_level === 'LOW' ? 0 : 1, fillColor: col, fillOpacity: RISK_FILL[cell.risk_level] })
-          .on('click', () => intelCb.current && intelCb.current({ kind: 'cell', cell })).addTo(layer);
+          .on('click', (e) => { L.DomEvent.stopPropagation(e); if (intelCb.current) intelCb.current({ kind: 'cell', cell, point: e.latlng ? { latitude: e.latlng.lat, longitude: e.latlng.lng } : null }); }).addTo(layer);
       });
       (Array.isArray(satelliteCells) ? satelliteCells : []).forEach((cell) => {
         L.polygon(cellCorners(cell, cellHalf), { color: SAT_COLOR, weight: 2, dashArray: '6 5', fillColor: SAT_COLOR, fillOpacity: 0.12 })
@@ -192,11 +196,27 @@ export default function MapView({
       if (isBlocked || isAlt) r.coordinates.forEach((p) => bounds.push(p)); // ordinary roads must not zoom the map out
     });
 
-    // recommended route (drawn above roads)
+    // the fastest alternative (when it is not the recommended one): grey, dashed, under the recommended route
+    const alt = Array.isArray(altRouteLine) ? altRouteLine.filter(okPair).map(toPair) : [];
+    if (alt.length > 1) {
+      L.polyline(alt, { color: '#475569', weight: 5, opacity: 0.7, dashArray: '8 8' }).bindTooltip('Fastest route (higher risk or blocked)').addTo(layer);
+      alt.forEach((p) => bounds.push(p));
+    }
+    // recommended route (drawn above roads): a white casing, then each stretch in the flood-risk colour of the cells it crosses
     if (routeLine.length > 1) {
       L.polyline(routeLine, { color: '#fff', weight: 12 }).addTo(layer);
-      L.polyline(routeLine, { color: colors.route, weight: 7 }).bindTooltip('Recommended route').addTo(layer);
+      const segs = (Array.isArray(routeSegments) ? routeSegments : []).filter((g) => Array.isArray(g.points) && g.points.length > 1);
+      if (segs.length) {
+        segs.forEach((g) => L.polyline(g.points.filter(okPair).map(toPair), { color: g.level ? RISK_COLOR[g.level] : colors.route, weight: 7 })
+          .bindTooltip(`Recommended lower-risk route${g.level ? ` · ${g.level} flood risk here` : ''}`).addTo(layer));
+        L.polyline(routeLine, { color: '#0B1220', weight: 1.5, opacity: 0.6, dashArray: '1 10' }).addTo(layer); // keeps the route readable over a same-colour cell
+      } else {
+        L.polyline(routeLine, { color: colors.route, weight: 7 }).bindTooltip('Recommended lower-risk route').addTo(layer);
+      }
       routeLine.forEach((p) => bounds.push(p));
+    }
+    if (pickedPoint && ok(pickedPoint.latitude, pickedPoint.longitude)) {
+      L.marker([pickedPoint.latitude, pickedPoint.longitude], { icon: emoji('📍', 32), zIndexOffset: 900 }).addTo(layer);
     }
 
     // reported incidents
@@ -244,7 +264,7 @@ export default function MapView({
     }
   }, [JSON.stringify(rawRoads), JSON.stringify(rawBlocked), JSON.stringify(rawIncidents), JSON.stringify(rawMarkers), JSON.stringify(rawRoute), // eslint-disable-line react-hooks/exhaustive-deps
     JSON.stringify(rawZones), JSON.stringify(rainAreas), JSON.stringify(places), JSON.stringify(riskCells), JSON.stringify(satelliteCells),
-    JSON.stringify(hotspots), JSON.stringify(terrainCells), level, user && user.latitude, user && user.longitude, alternative && alternative.road && alternative.road.id, labelBlockedOnly]);
+    JSON.stringify(hotspots), JSON.stringify(terrainCells), JSON.stringify(routeSegments), JSON.stringify(altRouteLine), JSON.stringify(pickedPoint), level, user && user.latitude, user && user.longitude, alternative && alternative.road && alternative.road.id, labelBlockedOnly]);
 
   return (
     <View style={[styles.map, { height }]}>

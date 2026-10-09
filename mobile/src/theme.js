@@ -3,7 +3,7 @@ import { Platform, StatusBar } from 'react-native';
 export const colors = {
   navy: '#0B1F33',
   navy2: '#132E4A',
-  bg: '#F8FAFC',
+  bg: '#F3F6FE',
   card: '#FFFFFF',
   text: '#0F172A',
   muted: '#64748B',
@@ -29,6 +29,15 @@ export const palette = {
   glass: 'rgba(255,255,255,0.10)',
   glassBorder: 'rgba(255,255,255,0.18)',
 };
+
+// Accent palette for navigation, sections and categories (never used to signal risk: risk keeps its own colours below).
+export const accents = {
+  blue: '#1565FF', cyan: '#0891B2', violet: '#7C3AED', coral: '#E11D48', amber: '#D97706', emerald: '#059669', indigo: '#4F46E5', pink: '#DB2777',
+};
+// one colour per tab, so each part of the app is recognisable at a glance
+export const TAB_COLOR = { Home: accents.blue, Map: accents.cyan, Report: accents.amber, Help: accents.coral, Alerts: accents.violet, Account: accents.emerald,
+  Dashboard: accents.blue, People: accents.indigo, Incidents: accents.amber, Control: accents.coral, Requests: accents.pink, Intel: accents.cyan, Insights: accents.violet,
+  Nearby: accents.cyan };
 
 // Risk colours. `riskColor` is the bright tone (pills, map, borders); `riskSurface` is a deeper tone of the same hue that keeps
 // white text above WCAG AA-large contrast on filled cards. HIGH (orange) and CRITICAL (red) are distinct, as on the map legend.

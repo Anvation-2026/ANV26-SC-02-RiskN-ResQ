@@ -282,6 +282,15 @@ export async function getSatelliteImagery() {
   return await http('/satellite/imagery');
 }
 
+// place search and place names go through the backend (OpenStreetMap Nominatim, cached and throttled there)
+export async function searchPlaces(q) {
+  return await http(`/geocode/search?q=${encodeURIComponent(q)}`);
+}
+
+export async function placeName(latitude, longitude) {
+  return await http(`/geocode/reverse?latitude=${latitude}&longitude=${longitude}`);
+}
+
 export async function getFloodRiskAt(latitude, longitude) {
   return http(`/flood-risk?latitude=${latitude}&longitude=${longitude}`);
 }

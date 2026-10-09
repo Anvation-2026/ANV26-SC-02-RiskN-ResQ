@@ -68,8 +68,14 @@ const s = StyleSheet.create({
 // One version of each, used by every screen: skeletons, empty/error states, metric cards, status pills, bottom sheet,
 // confirmation dialog, risk gauge, timeline. Motion lives in ./motion and honours "reduce motion".
 
-export const SectionTitle = ({ children, right }) => (
-  <View style={k.sectionRow}><Text style={k.section}>{children}</Text>{right}</View>
+export const SectionTitle = ({ children, right, color = '#7C3AED' }) => (
+  <View style={k.sectionRow}>
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 }}>
+      <View style={{ width: 4, height: 18, borderRadius: 2, backgroundColor: color }} />
+      <Text style={k.section}>{children}</Text>
+    </View>
+    {right}
+  </View>
 );
 
 export function Skeleton({ height = 14, width = '100%', radius: r = 8, style }) {
