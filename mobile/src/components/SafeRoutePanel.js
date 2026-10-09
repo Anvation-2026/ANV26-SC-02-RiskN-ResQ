@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import LocationPicker from './LocationPicker';
-import { planSafeRoute, reassessRoute } from '../services/api';
+import { planExitRoute, planSafeRoute, reassessRoute } from '../services/api';
 import { HAZARD_STYLE, planLayers, ROUTE_COLOR } from './geojson';
 import { colors, fonts, radius, shadow } from '../theme';
 
@@ -31,6 +31,7 @@ export function useSafeRoute(userLocation) {
   const [alert, setAlert] = useState(null);              // a reassessment that found new hazards on the route
   const [checkedAt, setCheckedAt] = useState(null);
   const [lastCheck, setLastCheck] = useState('');        // a re-check that found nothing new (shown so the tap has a visible result)
+  const [mode, setMode] = useState('route');             // 'route' = to a chosen destination, 'exit' = the quickest way out of the flood area
   const gps = userLocation && Number.isFinite(userLocation.latitude) ? { latitude: userLocation.latitude, longitude: userLocation.longitude, label: 'My location' } : null;
   const from = origin || gps;
 
@@ -49,13 +50,30 @@ export function useSafeRoute(userLocation) {
     setBusy(false);
   }, [from && from.latitude, from && from.longitude, destination]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // the quickest real road route OUT of the flagged flood area, from where the person is now (GPS), to a lower-risk place
+  const escape = useCallback(async () => {
+    const o = gps || origin;
+    setOpen(true); setMode('exit'); setPickMode(null); setAlert(null); setError(''); setLastCheck('');
+    if (!o) { setPlan(null); setError('Your location is needed to find the way out. Allow location, or use "Choose a destination instead".'); return; }
+    setBusy(true);
+    try {
+      const p = await planExitRoute(o);
+      setPlan(p);
+      setSelectedId(p.recommended_route_id || p.least_exposed_route_id);
+      setCheckedAt(p.generated_at);
+    } catch (e) {
+      setError(e && e.detail ? String(e.detail) : 'The way out could not be calculated. Check your connection and try again.');
+    }
+    setBusy(false);
+  }, [gps && gps.latitude, gps && gps.longitude, origin]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const selected = plan && plan.routes ? plan.routes.find((r) => r.route_id === selectedId) || plan.routes[0] : null;
 
   const recheck = useCallback(async () => {
     if (!selected) return;
     try {
       const known = (selected.hazard_intersections || []).map((h) => h.hazard_id);
-      const r = await reassessRoute({ geometry: selected.geometry, knownHazardIds: known, currentPosition: gps || from, destination });
+      const r = await reassessRoute({ geometry: selected.geometry, knownHazardIds: known, currentPosition: gps || from, destination: selected.destination || destination });
       setCheckedAt(r.checked_at);
       if (r.affected) { setAlert(r); setLastCheck(''); } else setLastCheck(`${r.message} (checked ${new Date(r.checked_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`);
     } catch (e) { setLastCheck(''); setError('Could not re-check the route right now. Check your connection.'); }
@@ -70,6 +88,8 @@ export function useSafeRoute(userLocation) {
 
   const acceptSuggestion = () => {
     if (!alert || !alert.suggestion) return;
+    if (selected && selected.destination) setDestination(selected.destination); // a new route to the same lower-risk place
+    setMode('route');
     setPlan(alert.suggestion);
     setLastCheck('');
     setSelectedId(alert.suggestion.recommended_route_id || alert.suggestion.least_exposed_route_id);
@@ -77,11 +97,11 @@ export function useSafeRoute(userLocation) {
     setAlert(null);
   };
   const clear = () => { setPlan(null); setSelectedId(null); setNavigating(false); setAlert(null); setError(''); setLastCheck(''); };
-  const close = () => { clear(); setOpen(false); setPickMode(null); setDestination(null); setOrigin(null); };
+  const close = () => { clear(); setOpen(false); setPickMode(null); setDestination(null); setOrigin(null); setMode('route'); };
   const pickOnMap = (pt) => { setDestination({ ...pt, label: `Map point ${pt.latitude.toFixed(4)}, ${pt.longitude.toFixed(4)}` }); setPickMode(null); };
 
   return { open, setOpen, origin, setOrigin, from, gps, destination, setDestination, pickMode, setPickMode, pickOnMap, plan, selected, selectedId, setSelectedId,
-    busy, error, calculate, navigating, setNavigating, alert, setAlert, acceptSuggestion, recheck, checkedAt, lastCheck, clear, close };
+    busy, error, calculate, navigating, setNavigating, alert, setAlert, acceptSuggestion, recheck, checkedAt, lastCheck, clear, close, mode, setMode, escape };
 }
 
 export { planLayers };
@@ -90,6 +110,9 @@ const STATUS = {
   RECOMMENDED: { bg: '#ECFDF5', fg: '#065F46', icon: 'check-circle', title: 'Recommended route found' },
   ALL_ROUTES_AFFECTED: { bg: '#FEF2F2', fg: '#991B1B', icon: 'alert-octagon', title: 'Every route crosses a known flood hazard' },
   NOT_CHECKED: { bg: '#FFFBEB', fg: '#92400E', icon: 'help-circle', title: 'Route could not be fully checked for flood risk' },
+  EXIT_ROUTE_FOUND: { bg: '#ECFDF5', fg: '#065F46', icon: 'log-out', title: 'Way out of the flood area found' },
+  ALREADY_OUTSIDE: { bg: '#EFF6FF', fg: '#1E40AF', icon: 'info', title: 'You are outside the flagged flood area' },
+  NO_EXIT_FOUND: { bg: '#FEF2F2', fg: '#991B1B', icon: 'alert-octagon', title: 'No way out by road was found' },
 };
 
 // Setup card: origin and destination, then Calculate. Results card: routes, hazards, directions, freshness, recalculate.
@@ -98,14 +121,28 @@ export function SafeRoutePanel({ sr }) {
   const [showSteps, setShowSteps] = useState(false);
   const plan = sr.plan;
   const sel = sr.selected;
+  const exit = sr.mode === 'exit';
   return (
     <View style={s.card} accessibilityLabel="Lower-risk route planner">
       <View style={s.head}>
         <View style={s.headIcon}><Feather name="navigation-2" size={16} color="#fff" /></View>
-        <Text style={s.title}>Find a lower-risk route</Text>
+        <Text style={s.title}>{exit ? 'Route out of the flood area' : 'Find a lower-risk route'}</Text>
         <Pressable onPress={sr.close} accessibilityRole="button" accessibilityLabel="Close route planner" hitSlop={10}><Feather name="x" size={20} color={colors.muted} /></Pressable>
       </View>
 
+      {exit ? (
+        <>
+          {plan && plan.drill ? <Text style={s.drill}>SIMULATED DRILL · the flood area is an exercise, the roads and route are real</Text> : null}
+          <Text style={s.label}>FROM</Text>
+          <View style={s.field}><Feather name="crosshair" size={15} color={colors.primary} /><Text style={[s.fieldText, !sr.gps && s.placeholder]} numberOfLines={1}>{sr.gps ? 'My location (live GPS)' : 'Location needed'}</Text></View>
+          <Text style={s.label}>TO</Text>
+          <View style={s.field}><Feather name="log-out" size={15} color="#059669" /><Text style={s.fieldText} numberOfLines={2}>{sel && sel.destination ? sel.destination.label : 'The nearest lower-risk area outside the flagged flood zone'}</Text></View>
+          <Pressable onPress={() => { sr.clear(); sr.setMode('route'); }} accessibilityRole="button" style={s.switchMode}>
+            <Feather name="flag" size={13} color="#7C3AED" /><Text style={s.switchText}>Choose a destination instead</Text>
+          </Pressable>
+        </>
+      ) : null}
+      {!exit ? <>
       <Text style={s.label}>FROM</Text>
       <Pressable style={s.field} onPress={() => setPicker('origin')} accessibilityRole="button" accessibilityLabel="Choose the start point">
         <Feather name={sr.origin ? 'map-pin' : 'crosshair'} size={15} color={colors.primary} />
@@ -124,12 +161,24 @@ export function SafeRoutePanel({ sr }) {
         </Pressable>
       </View>
       {sr.pickMode ? <Text style={s.hint}>Tap the map above to set the destination.</Text> : null}
+      <Pressable onPress={() => { setShowSteps(false); sr.escape(); }} accessibilityRole="button" style={s.switchMode}>
+        <Feather name="log-out" size={13} color="#059669" /><Text style={[s.switchText, { color: '#047857' }]}>In a flood area? Find the quickest way out</Text>
+      </Pressable>
+      </> : null}
 
+      {exit ? (
+        <Pressable style={[s.go, (!sr.gps || sr.busy) && { opacity: 0.5 }]} disabled={!sr.gps || sr.busy}
+          onPress={() => { setShowSteps(false); sr.escape(); }} accessibilityRole="button">
+          {sr.busy ? <ActivityIndicator color="#fff" size="small" /> : <Feather name="refresh-cw" size={15} color="#fff" />}
+          <Text style={s.goText}>{sr.busy ? 'Finding the quickest way out by road…' : 'Recalculate from my position'}</Text>
+        </Pressable>
+      ) : (
       <Pressable style={[s.go, (!sr.from || !sr.destination || sr.busy) && { opacity: 0.5 }]} disabled={!sr.from || !sr.destination || sr.busy}
         onPress={() => { setShowSteps(false); sr.calculate(); }} accessibilityRole="button">
         {sr.busy ? <ActivityIndicator color="#fff" size="small" /> : <Feather name={plan ? 'refresh-cw' : 'search'} size={15} color="#fff" />}
         <Text style={s.goText}>{sr.busy ? 'Checking routes against flood hazards…' : plan ? 'Recalculate route' : 'Calculate route'}</Text>
       </Pressable>
+      )}
       {sr.error ? <Text style={s.error}>{sr.error}</Text> : null}
 
       {plan ? (
@@ -142,7 +191,7 @@ export function SafeRoutePanel({ sr }) {
             </View>
           </View>
 
-          <Text style={s.label}>ROUTES ({plan.routes.length}) · TAP TO COMPARE</Text>
+          {plan.routes.length ? <Text style={s.label}>{exit ? 'WAYS OUT' : 'ROUTES'} ({plan.routes.length}) · TAP TO COMPARE</Text> : null}
           {plan.routes.map((r) => {
             const on = sel && r.route_id === sel.route_id;
             const col = !r.feasible ? ROUTE_COLOR.affected : r.recommended ? ROUTE_COLOR.recommended : on ? ROUTE_COLOR.selected : ROUTE_COLOR.other;
@@ -153,6 +202,7 @@ export function SafeRoutePanel({ sr }) {
                 <View style={{ flex: 1 }}>
                   <Text style={[s.routeLabel, { color: col }]}>{r.label}{r.is_fastest ? ' · fastest' : ''}</Text>
                   <Text style={s.routeSub} numberOfLines={1}>{r.summary}</Text>
+                  {r.exit_after_km != null ? <Text style={[s.routeSub, { color: '#047857', fontFamily: fonts.bold }]}>Out of the flood area after {r.exit_after_km} km (~{r.exit_after_minutes} min)</Text> : null}
                   <Text style={s.routeSub}>{r.distance_km} km · {r.eta_minutes} min · {r.hazard_intersections.filter((h) => h.class !== 'CAUTION').length ? `${r.hazard_intersections.filter((h) => h.class !== 'CAUTION').length} known hazard(s) on it` : 'no known hazard on it'}</Text>
                 </View>
                 <Feather name={on ? 'check-circle' : 'circle'} size={18} color={on ? col : '#CBD5E1'} />
@@ -165,6 +215,7 @@ export function SafeRoutePanel({ sr }) {
               <View style={s.stats}>
                 <View style={s.stat}><Text style={s.statVal}>{sel.distance_km} km</Text><Text style={s.statLbl}>DISTANCE</Text></View>
                 <View style={s.stat}><Text style={s.statVal}>{sel.eta_minutes} min</Text><Text style={s.statLbl}>EST. TIME</Text></View>
+                {sel.exit_after_km != null ? <View style={[s.stat, { backgroundColor: '#ECFDF5' }]}><Text style={[s.statVal, { color: '#047857' }]}>{sel.exit_after_minutes} min</Text><Text style={s.statLbl}>OUT OF FLOOD AREA</Text></View> : null}
                 <View style={s.stat}><Text style={[s.statVal, sel.exposure.excluded_hazard_m + sel.exposure.avoid_hazard_m > 0 && { color: '#B91C1C' }]}>{sel.exposure.excluded_hazard_m + sel.exposure.avoid_hazard_m} m</Text><Text style={s.statLbl}>IN HAZARDS</Text></View>
               </View>
               {sel.hazard_intersections.length ? sel.hazard_intersections.map((h) => (
@@ -172,7 +223,7 @@ export function SafeRoutePanel({ sr }) {
                   <View style={[s.hzDot, { backgroundColor: (HAZARD_STYLE[h.kind] || {}).color || '#DC2626' }]} />
                   <Text style={s.hzText}>{h.label}: {h.length_m} m of this route · {h.class === 'EXCLUDE' ? 'avoid' : h.class === 'AVOID' ? 'lower confidence' : 'area-level caution'} · observed {ago(h.observed_at)} · {h.source}</Text>
                 </View>
-              )) : <Text style={s.line}>No hazard currently known to RiskN ResQ lies on this route. That does not mean the route is safe.</Text>}
+              )) : <Text style={s.line}>No hazard currently known to RiskN ResQ lies on this route{sel.exit_after_km != null ? ' after it leaves the flagged area' : ''}. That does not mean the route is safe.</Text>}
 
               {sel.steps && sel.steps.length ? (
                 <>
@@ -217,8 +268,14 @@ export function SafeRoutePanel({ sr }) {
             </View>
           ) : null}
 
-          <Text style={s.label}>HAZARD DATA USED</Text>
-          {Object.entries(plan.data_coverage).map(([k, v]) => (
+          {exit && plan.flagged_area_parts && plan.flagged_area_parts.length ? (
+            <>
+              <Text style={s.label}>FLAGGED FLOOD AREA</Text>
+              {plan.flagged_area_parts.map((x) => <Text key={x} style={s.cov}>• {x}</Text>)}
+            </>
+          ) : null}
+          {Object.keys(plan.data_coverage || {}).length ? <Text style={s.label}>HAZARD DATA USED</Text> : null}
+          {Object.entries(plan.data_coverage || {}).map(([k, v]) => (
             <Text key={k} style={s.cov}><Text style={[s.covTag, { color: v.usable ? '#047857' : '#B45309' }]}>{k.replace('_', ' ').toUpperCase()} · {v.status}</Text>{'  '}{v.note}{v.acquired_at ? ` Pass: ${String(v.acquired_at).slice(0, 10)} (${ago(v.acquired_at)}).` : ''}{v.updated_at ? ` Updated ${ago(v.updated_at)}.` : ''}</Text>
           ))}
           <Text style={s.cov}>Hazards last checked {ago(sr.checkedAt || plan.generated_at)}.</Text>
@@ -240,7 +297,7 @@ export function SafeRoutePanel({ sr }) {
 // legend for the satellite flood layer and route planning colours
 export function FloodLegend({ withRoutes }) {
   const items = [
-    ['SATELLITE_INUNDATION'], ['VERIFIED_REPORT'], ['USER_REPORT'], ['ROAD_CLOSURE'], ['WEATHER_RISK_AREA'],
+    ['SATELLITE_INUNDATION'], ['VERIFIED_REPORT'], ['USER_REPORT'], ['ROAD_CLOSURE'], ['WEATHER_RISK_AREA'], ...(withRoutes ? [['FLOOD_ZONE'], ['DRILL_ZONE']] : []),
   ].map(([k]) => [HAZARD_STYLE[k].color, HAZARD_STYLE[k].label, 'box', HAZARD_STYLE[k].dashed]);
   const routes = withRoutes ? [[ROUTE_COLOR.recommended, 'Recommended route', 'line'], [ROUTE_COLOR.selected, 'Selected alternative', 'line'],
     [ROUTE_COLOR.other, 'Other routes', 'dash'], [ROUTE_COLOR.affected, 'Crosses a hazard', 'dash']] : [];
@@ -271,6 +328,9 @@ const s = StyleSheet.create({
   mapPick: { flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 12, paddingHorizontal: 12, minHeight: 46, borderWidth: 1.5, borderColor: '#7C3AED' },
   mapPickOn: { backgroundColor: '#7C3AED' },
   mapPickText: { fontFamily: fonts.extrabold, fontSize: 12, color: '#7C3AED' },
+  drill: { fontFamily: fonts.extrabold, fontSize: 11, letterSpacing: 0.4, color: '#5B21B6', backgroundColor: '#EDE9FE', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, marginTop: 4, overflow: 'hidden' },
+  switchMode: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', paddingVertical: 8, marginTop: 4 },
+  switchText: { fontFamily: fonts.extrabold, fontSize: 12, color: '#6D28D9' },
   okLine: { fontFamily: fonts.semibold, fontSize: 12, color: '#047857', marginTop: 8, lineHeight: 17 },
   hint: { fontFamily: fonts.medium, fontSize: 12, color: '#6D28D9', marginTop: 6, lineHeight: 17 },
   go: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#059669', borderRadius: 14, minHeight: 48, marginTop: 14 },

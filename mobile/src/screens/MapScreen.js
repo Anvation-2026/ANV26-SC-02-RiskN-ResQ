@@ -84,6 +84,7 @@ export default function MapScreen({ params }) {
     if (!params) return;
     if (params.layer && Object.prototype.hasOwnProperty.call(layers, params.layer)) setLayers((l) => ({ ...l, [params.layer]: true }));
     if (params.focusEvacuation && userLocation) findEvac();
+    if (params.escape) { closeSheet(); setEvac(null); sr.escape(); } // "Show lower-risk route" from an alert: the quickest way OUT of the flood area
   }, [params]); // eslint-disable-line react-hooks/exhaustive-deps
   const tileOverlays = [
     layers.nasa_flood && layerById('nasa_flood') ? { ...layerById('nasa_flood'), opacity: 0.5 } : null,

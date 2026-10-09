@@ -60,3 +60,28 @@ test('navigate safely: map pick, ranking, hazard overlay and reassessment', asyn
   await expect(text(page, /Flooded Road report \(verified\): \d+ m of this route/)).toBeVisible();
   await expect(text(page, 'Not recommended')).toBeVisible();
 });
+
+test('drill near the user: "Show lower-risk route" gives the quickest real road route out of the flood area', async ({ page }) => {
+  const token = await apiLogin(ADMIN);
+  const auth = { 'content-type': 'application/json', Authorization: `Bearer ${token}` };
+  // the browser's position (playwright.config) is inside Zone A: an admin drill there flags the user's area
+  expect((await fetch(`${API}/simulate-hazard`, { method: 'POST', headers: auth, body: JSON.stringify({ hazard: 'FLOOD', rainfall: 120, zone: 'Zone A' }) })).status).toBe(200);
+  try {
+    await openApp(page);
+    await login(page, RIDER);
+    await expect(text(page, 'SIMULATED DRILL · NOT A REAL WARNING')).toBeVisible({ timeout: 90_000 });
+    await expect(page.getByText('No action needed now').and(page.locator(':visible'))).toHaveCount(0); // the explanation matches the raised level
+    await page.getByRole('button', { name: 'Show lower-risk route out of the flood area' }).and(page.locator(':visible')).click();
+    await expect(text(page, 'Route out of the flood area')).toBeVisible();
+    await expect(text(page, /Way out of the flood area found|Every route crosses a known flood hazard|No way out by road was found/)).toBeVisible({ timeout: 60_000 });
+    await expect(text(page, /^Out of the flood area after \d+(\.\d+)? km \(~\d+ min\)$/)).toBeVisible();
+    await expect(text(page, 'Zone A: CRITICAL flood alert (SIMULATED DRILL)')).toBeVisible();
+    await expect(page.locator('body')).toContainText('SIMULATED DRILL: the flagged flood area comes from an admin exercise. The roads and the route are real.');
+    await expect(page.getByText('NEAREST DESIGNATED EVACUATION POINT').and(page.locator(':visible'))).toHaveCount(0); // not the evacuation-point lookup
+    await expect(page.locator('.leaflet-tooltip').filter({ hasText: /^Lower-risk area: / })).toHaveCount(1);
+    await expect(page.locator('.leaflet-overlay-pane path[stroke="#7C3AED"]').first()).toBeAttached(); // the drill area is drawn
+    await expect(text(page, /Show directions \(\d+ steps\)/)).toBeVisible();
+  } finally {
+    await fetch(`${API}/reset`, { method: 'POST', headers: auth });
+  }
+});

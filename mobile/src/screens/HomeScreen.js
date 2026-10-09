@@ -325,7 +325,7 @@ export default function HomeScreen({ navigate, openAI }) {
           <AlertCard
             alert={topAlert}
             road={blocked.length ? blocked.map((r) => r.name).join(', ') : undefined}
-            onViewRoute={() => navigate('Map')}
+            onViewRoute={() => navigate('Map', ['HIGH', 'CRITICAL'].includes(String(topAlert.severity).toUpperCase()) ? { escape: Date.now() } : undefined)}
           />
         ) : currentLevel !== 'LOW' ? (
           <View style={[styles.status, { borderLeftColor: riskColor(currentLevel) }]}>

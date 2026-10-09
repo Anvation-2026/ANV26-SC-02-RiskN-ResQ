@@ -49,6 +49,7 @@ export default function EmergencyPanel({ risk, locationLabel, userLocation, navi
       <Text style={[s.text, s.action]}>{risk.recommended_action || 'Avoid low-lying roads and follow official instructions.'}</Text>
 
       <View style={s.box}>
+        <Text style={s.small}>Show lower-risk route: the quickest road route from where you are now out of the flagged flood area.</Text>
         <Text style={s.label}>NEAREST DESIGNATED EVACUATION POINT</Text>
         {point ? (
           <>
@@ -60,9 +61,14 @@ export default function EmergencyPanel({ risk, locationLabel, userLocation, navi
           : evac ? <Text style={s.small}>{evac.message || 'No designated evacuation point was found for this area.'}</Text>
             : <Text style={s.small}>Looking up the nearest designated point…</Text>}
         <View style={s.row}>
-          <Pressable style={s.btn} onPress={() => navigate && navigate('Map', { focusEvacuation: true })} accessibilityRole="button">
-            <Feather name="navigation" size={15} color={bg} />
+          <Pressable style={s.btn} onPress={() => navigate && navigate('Map', { escape: Date.now() })} accessibilityRole="button"
+            accessibilityLabel="Show lower-risk route out of the flood area">
+            <Feather name="log-out" size={15} color={bg} />
             <Text style={[s.btnText, { color: bg }]}>Show lower-risk route</Text>
+          </Pressable>
+          <Pressable style={[s.btn, s.btnGhost]} onPress={() => navigate && navigate('Map', { focusEvacuation: Date.now() })} accessibilityRole="button">
+            <Feather name="home" size={15} color="#fff" />
+            <Text style={[s.btnText, { color: '#fff' }]}>Evacuation point</Text>
           </Pressable>
           <Pressable style={[s.btn, s.btnGhost]} onPress={() => navigate && navigate('Help')} accessibilityRole="button">
             <Feather name="life-buoy" size={15} color="#fff" />

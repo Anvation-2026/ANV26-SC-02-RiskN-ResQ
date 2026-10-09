@@ -68,6 +68,19 @@ class OSRMProvider(RoutingProvider):
 
         return candidates
 
+    async def durations(self, origin: RoutePoint, destinations: List[RoutePoint]) -> List[Optional[float]]:
+        """Driving time in seconds from origin to each destination (OSRM table service, one request); None if unreachable."""
+        pts = [origin, *destinations]
+        coords = ";".join(f"{p.longitude},{p.latitude}" for p in pts)
+        url = f"https://router.project-osrm.org/table/v1/driving/{coords}?sources=0&annotations=duration"
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            data = resp.json()
+        if data.get("code") != "Ok":
+            return [None] * len(destinations)
+        return list(data["durations"][0][1:])
+
 
 COMPASS = ("north", "northeast", "east", "southeast", "south", "southwest", "west", "northwest")
 

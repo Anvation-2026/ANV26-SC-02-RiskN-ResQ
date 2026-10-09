@@ -42,7 +42,7 @@ export default function AlertsScreen({ navigate }) {
         ) : alerts.length ? (
           alerts.map((a, i) => (
             <FadeIn key={a.id} delay={staggerDelay(i, 60, 300)}>
-              <AlertCard alert={a} road={road} onViewRoute={() => navigate('Map')} />
+              <AlertCard alert={a} road={road} onViewRoute={() => navigate('Map', ['HIGH', 'CRITICAL'].includes(String(a.severity).toUpperCase()) ? { escape: Date.now() } : undefined)} />
             </FadeIn>
           ))
         ) : (

@@ -262,6 +262,10 @@ def alert_out(r) -> dict:
         "recommended_action": d.get("action"),
         "probability": d.get("probability"),
         "simulated": (d.get("message") or "").startswith("SIMULATED DRILL"),
+        # the area a zone alert covers (zone centre + radius), so the app applies it only to people inside it
+        "zone_latitude": db.ZONES[d["affected_zone"]][0] if d.get("affected_zone") in db.ZONES else None,
+        "zone_longitude": db.ZONES[d["affected_zone"]][1] if d.get("affected_zone") in db.ZONES else None,
+        "area_radius_km": config.ZONE_ALERT_RADIUS_KM if d.get("affected_zone") in db.ZONES else None,
     }
 
 

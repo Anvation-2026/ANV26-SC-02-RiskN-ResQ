@@ -301,6 +301,12 @@ export async function planSafeRoute(origin, destination) {
   return http('/routes/safe-route', { method: 'POST', body: { origin: place(origin), destination: place(destination) } });
 }
 
+// the quickest real road route OUT of the area RiskN ResQ currently flags for flooding (zone alerts incl. drills, high-risk
+// cells, satellite detections, credible flood reports), to a lower-risk place outside it
+export async function planExitRoute(origin) {
+  return http('/routes/exit', { method: 'POST', body: { origin: { latitude: origin.latitude, longitude: origin.longitude } } });
+}
+
 export async function reassessRoute({ geometry, knownHazardIds = [], currentPosition, destination }) {
   const place = (p) => (p ? { latitude: p.latitude, longitude: p.longitude, label: p.label ? String(p.label).slice(0, 120) : null } : null);
   return http('/routes/reassess', { method: 'POST', body: { geometry, known_hazard_ids: knownHazardIds, current_position: place(currentPosition), destination: place(destination) } });

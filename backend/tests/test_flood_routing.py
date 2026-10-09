@@ -468,3 +468,94 @@ def test_osrm_steps_become_plain_directions():
     assert [s["instruction"] for s in steps] == ["Head east on MG Road", "Turn left onto Brigade Road", "At the roundabout, take exit 2",
                                                  "Arrive at your destination"]
     assert steps[0]["distance_m"] == 300 and steps[1]["location"] == [12.9, 77.52]
+
+
+# ================================================================ route out of a flagged flood area
+import exit_route  # noqa: E402
+
+ZONE_A = db.ZONES["Zone A"]
+INSIDE = {"latitude": ZONE_A[0] + 0.005, "longitude": ZONE_A[1] + 0.005}
+
+
+class StraightRouter:
+    """Drives in a straight line to wherever it is asked (10 m/s), so tests control geometry without a road network."""
+    supports_via = True
+
+    def __init__(self, fail=False):
+        self.fail, self.calls = fail, 0
+
+    async def compute_routes(self, origin, destination, via=None):
+        self.calls += 1
+        if self.fail:
+            raise RuntimeError("router down")
+        pts = [[origin.latitude, origin.longitude], [(origin.latitude + destination.latitude) / 2, (origin.longitude + destination.longitude) / 2],
+               [destination.latitude, destination.longitude]]
+        return [_straight(pts)]
+
+
+def _straight(pts):
+    c = cand(pts, 1, "Straight")
+    c.duration_seconds = int(c.distance_meters / 10)
+    c.eta_minutes = max(1, round(c.duration_seconds / 60))
+    return c
+
+
+def drill(client, zone="Zone A", rain=120):
+    r = client.post("/simulate-hazard", json={"hazard": "FLOOD", "rainfall": rain, "zone": zone})
+    assert r.status_code == 200, r.text
+
+
+def test_zone_alerts_carry_the_area_they_cover(client):
+    drill(client)
+    a = next(x for x in client.get("/alerts?active_only=true").json() if x["affected_zone"] == "Zone A")
+    assert a["simulated"] and (a["zone_latitude"], a["zone_longitude"]) == ZONE_A and a["area_radius_km"] == config.ZONE_ALERT_RADIUS_KM
+
+
+def test_exit_route_leaves_the_drill_area_by_road(client):
+    router = StraightRouter()
+    routes_flood.routing_provider = router
+    drill(client)
+    r = client.post("/routes/exit", json={"origin": INSIDE}).json()
+    assert r["status"] == "EXIT_ROUTE_FOUND" and r["drill"] is True and r["mode"] == "EXIT"
+    best = next(x for x in r["routes"] if x["recommended"])
+    proj = geo.projection_for(*ZONE_A)
+    from shapely.geometry import Point
+    centre = proj.to_m(Point(ZONE_A[1], ZONE_A[0]))
+    end = proj.to_m(Point(best["destination"]["longitude"], best["destination"]["latitude"]))
+    assert end.distance(centre) > config.ZONE_ALERT_RADIUS_KM * 1000  # it really ends outside the flagged circle
+    assert 0 < best["exit_after_km"] <= best["distance_km"] and best["exit_point"]
+    # the quickest way out is the one that leaves the area soonest (the person is NE of the centre, so it heads away from it)
+    assert best["exit_after_minutes"] == min(x["exit_after_minutes"] for x in r["routes"] if x["feasible"])
+    assert r["hazards"][0]["kind"] == "DRILL_ZONE" and r["warnings"][0].startswith("SIMULATED DRILL")
+    assert len(r["routes"]) >= 2 and "safe" not in best["label"].lower()
+
+
+def test_exit_route_when_outside_or_no_flood(client):
+    routes_flood.routing_provider = StraightRouter()
+    assert client.post("/routes/exit", json={"origin": INSIDE}).json()["status"] == "ALREADY_OUTSIDE"  # nothing flagged
+    drill(client)
+    far = {"latitude": ZONE_A[0] + 0.2, "longitude": ZONE_A[1] + 0.2}
+    r = client.post("/routes/exit", json={"origin": far}).json()
+    assert r["status"] == "ALREADY_OUTSIDE" and r["routes"] == []
+
+
+def test_exit_route_avoids_a_way_out_through_a_flood_report(client):
+    routes_flood.routing_provider = StraightRouter()
+    drill(client)
+    first = client.post("/routes/exit", json={"origin": INSIDE}).json()
+    best = next(x for x in first["routes"] if x["recommended"])
+    g = best["geometry"]
+    p = [(g[1][0] + g[2][0]) / 2, (g[1][1] + g[2][1]) / 2]  # on the outer half of that route, outside the drill circle
+    inc = client.post("/incidents", json={"type": "FLOODED_ROAD", "latitude": p[0], "longitude": p[1]}).json()
+    client.post(f"/incidents/{inc.get('id') or inc['incident']['id']}/verify")
+    again = client.post("/routes/exit", json={"origin": INSIDE}).json()
+    new_best = next((x for x in again["routes"] if x["recommended"]), None)
+    assert new_best is None or new_best["destination"] != best["destination"]
+
+
+def test_exit_route_router_failure_and_auth(client):
+    routes_flood.routing_provider = StraightRouter(fail=True)
+    drill(client)
+    assert client.post("/routes/exit", json={"origin": INSIDE}).status_code == 503
+    assert client.post("/routes/exit", json={"origin": {"latitude": 99, "longitude": 1}}).status_code == 422
+    assert TestClient(main.app).post("/routes/exit", json={"origin": INSIDE}).status_code == 401

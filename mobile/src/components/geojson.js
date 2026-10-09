@@ -15,6 +15,8 @@ export const HAZARD_STYLE = {
   ROAD_CLOSURE: { color: '#7F1D1D', fill: 0.5, label: 'Road closure' },
   REPORTED_BLOCKED_ROAD: { color: '#DC2626', fill: 0.35, label: 'Reported blocked road' },
   WEATHER_RISK_AREA: { color: '#F59E0B', fill: 0.1, dashed: true, label: 'High flood-risk area (weather-based)' },
+  FLOOD_ZONE: { color: '#DC2626', fill: 0.14, dashed: true, label: 'Flagged flood area' },
+  DRILL_ZONE: { color: '#7C3AED', fill: 0.14, dashed: true, label: 'Flagged flood area (SIMULATED DRILL)' },
 };
 
 export const ROUTE_COLOR = { recommended: '#059669', selected: '#7C3AED', affected: '#DC2626', other: '#64748B' };
@@ -29,9 +31,13 @@ export function planLayers(sr) {
     routeColor: color,
     routeOptions: sr.plan.routes.filter((r) => !sel || r.route_id !== sel.route_id).map((r) => ({ id: r.route_id, points: r.geometry, affected: !r.feasible, label: `${r.label}: ${r.distance_km} km, ${r.eta_minutes} min` })),
     hazardShapes: (sr.plan.hazards || []).map((h) => ({ id: h.hazard_id, kind: h.kind, geometry: h.geometry, label: h.label })),
-    endpoints: [
-      { id: 'sr-origin', latitude: sr.plan.origin.latitude, longitude: sr.plan.origin.longitude, label: `Start: ${sr.plan.origin.label || 'origin'}`, color: '#0F172A' },
-      { id: 'sr-dest', latitude: sr.plan.destination.latitude, longitude: sr.plan.destination.longitude, label: `Destination: ${sr.plan.destination.label || 'selected place'}`, color: '#7C3AED', highlight: true },
-    ],
+    endpoints: (() => {
+      // an exit plan has a different end point per route (each way out ends somewhere else)
+      const dest = (sel && sel.destination) || sr.plan.destination;
+      const pts = [{ id: 'sr-origin', latitude: sr.plan.origin.latitude, longitude: sr.plan.origin.longitude, label: `Start: ${sr.plan.origin.label || 'origin'}`, color: '#0F172A' }];
+      if (dest) pts.push({ id: 'sr-dest', latitude: dest.latitude, longitude: dest.longitude, label: `${sr.plan.mode === 'EXIT' ? 'Lower-risk area' : 'Destination'}: ${dest.label || 'selected place'}`, color: '#7C3AED', highlight: true });
+      if (sel && sel.exit_point) pts.push({ id: 'sr-exit', latitude: sel.exit_point[0], longitude: sel.exit_point[1], label: 'Leaves the flagged flood area here', color: '#059669' });
+      return pts;
+    })(),
   };
 }

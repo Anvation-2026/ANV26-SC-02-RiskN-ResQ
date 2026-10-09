@@ -87,6 +87,7 @@ FLOOD_MIN_AREA_M2 = float(os.getenv("FLOOD_MIN_AREA_M2", "20000"))  # flood patc
 FLOOD_MAX_SLOPE_DEG = float(os.getenv("FLOOD_MAX_SLOPE_DEG", "5"))  # steeper ground is masked (radar shadow, water cannot pond)
 FLOOD_ANALYSIS_PIXELS = max(128, min(1024, int(os.getenv("FLOOD_ANALYSIS_PIXELS", "640"))))  # raster width for Planetary Computer
 FLOOD_AUTO_ANALYSIS = os.getenv("FLOOD_AUTO_ANALYSIS", "1").strip() not in ("0", "false", "no")  # analyse each new pass once
+ZONE_ALERT_RADIUS_KM = float(os.getenv("ZONE_ALERT_RADIUS_KM", "3.5"))  # a HIGH/CRITICAL zone alert flags this radius around the zone centre
 FLOOD_ANALYSIS_STALE_DAYS = float(os.getenv("FLOOD_ANALYSIS_STALE_DAYS", "12"))  # older satellite passes no longer block routes
 
 # ---- AI Assistant (Gemini / OpenAI / Grounded Engine) ----

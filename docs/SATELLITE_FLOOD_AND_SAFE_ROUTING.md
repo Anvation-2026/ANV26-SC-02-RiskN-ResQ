@@ -7,6 +7,25 @@
 
 A detection is never called an officially confirmed flood, and a route is never called safe.
 
+## Route out of a flood area (`backend/exit_route.py`)
+When the app warns you that you are in a flagged flood area (an emergency panel or a HIGH/CRITICAL alert, including an admin **SIMULATED DRILL**), **Show lower-risk route** opens the quickest real road route *out* of that area. It no longer only looks up the nearest evacuation point; that is still available as a separate button.
+
+- **Flagged area:**
+  - HIGH/CRITICAL zone alerts: a circle of `ZONE_ALERT_RADIUS_KM` (3.5 km) around the zone centre. The app applies a zone alert only to people inside this circle.
+  - HIGH/CRITICAL weather-based risk cells.
+  - Fresh satellite detections, plus a 300 m margin.
+  - Verified or credible flood reports, plus a 300 m margin.
+- **Exit candidates:**
+  - Points 500 m beyond the edge of the area in 16 directions from you.
+  - Designated shelters and hospitals outside the area.
+- **Choosing a route:**
+  - One OSRM `table` request gives driving times to all candidates.
+  - The quickest four, in distinct directions, are routed with turn-by-turn steps.
+  - Each route is checked against the hazard layer. Ranking: no EXCLUDE hazard first, then the time until the route leaves the area, then total time.
+- **Statuses:** `EXIT_ROUTE_FOUND`, `ALREADY_OUTSIDE`, `NO_EXIT_FOUND`, `ALL_ROUTES_AFFECTED`.
+- **Drills:** the area is simulated and labelled as such; the roads and the route are real. The destination is "a lower-risk area outside the flagged flood zone", never "safe".
+- **Endpoint:** `POST /routes/exit` `{origin}` (signed in).
+
 ## Satellite method (`backend/flood_analysis.py`)
 | Step | Planetary Computer engine (default, no key) | Earth Engine engine (when configured) |
 |---|---|---|

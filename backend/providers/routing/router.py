@@ -38,3 +38,7 @@ class CompositeRoutingProvider(RoutingProvider):
 
         # Fallback to OSRM
         return await self.osrm_provider.compute_routes(origin, destination)
+
+    async def durations(self, origin: RoutePoint, destinations: List[RoutePoint]):
+        """Travel times to many places at once (OSRM table service), used to find the quickest way out of a flood area."""
+        return await self.osrm_provider.durations(origin, destinations)

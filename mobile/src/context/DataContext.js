@@ -289,7 +289,15 @@ export function DataProvider({ children }) {
   // Effective risk: the position-based reading, raised to the strongest active zone alert if that is higher.
   const effectiveRisk = useMemo(() => {
     if (!risk) return risk;
-    const top = zoneAlerts.reduce((best, a) => (rank(a.severity) > rank(best?.severity) ? a : best), null);
+    // a zone alert covers a circle around its zone centre: it raises the risk only for people inside it (alerts without an
+    // area, e.g. an admin broadcast to everyone, apply everywhere). The exit route uses the same area.
+    const covers = (al) => {
+      if (al.zone_latitude == null || al.zone_longitude == null || !al.area_radius_km || !userLocation) return true;
+      const k = Math.cos((userLocation.latitude * Math.PI) / 180);
+      const dkm = Math.hypot((userLocation.latitude - al.zone_latitude) * 110.54, (userLocation.longitude - al.zone_longitude) * 111.32 * k);
+      return dkm <= al.area_radius_km;
+    };
+    const top = zoneAlerts.filter(covers).reduce((best, a) => (rank(a.severity) > rank(best?.severity) ? a : best), null);
     if (top && rank(top.severity) > rank(risk.level)) {
       return {
         ...risk,
@@ -298,12 +306,20 @@ export function DataProvider({ children }) {
         score: Math.max(risk.score || 0, top.risk_score || 0),
         risk_score: Math.max(risk.score || 0, top.risk_score || 0),
         reason: top.reason || top.message,
+        // the explanation must match the raised level: the position-based signals, evidence tier and action described the
+        // lower reading and would contradict the alert ("NORMAL ... no action needed" under CRITICAL)
+        signals: [],
+        evidence_tier: undefined,
+        evidence_tier_note: undefined,
+        recommended_action: top.recommended_action || (rank(top.severity) >= rank('HIGH')
+          ? 'Leave the flagged flood area by the lower-risk route shown in the app, or move to higher ground. Follow official instructions.'
+          : risk.recommended_action),
         zoneAlert: true,
         drill: /^SIMULATED DRILL/i.test(top.message || ''),
       };
     }
     return risk;
-  }, [risk, zoneAlerts]);
+  }, [risk, zoneAlerts, userLocation && userLocation.latitude, userLocation && userLocation.longitude]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const value = {
     loading,

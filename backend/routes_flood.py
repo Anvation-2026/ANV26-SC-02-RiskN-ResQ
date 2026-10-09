@@ -7,6 +7,7 @@
   GET  /flood-analysis/engine           admin: which imagery engine is configured
   POST /routes/safe-route               signed in: candidate routes checked against hazards, ranked
   POST /routes/reassess                 signed in: re-check a followed route against current hazards (no satellite request)
+  POST /routes/exit                     signed in: quickest road route OUT of the flagged flood area to a lower-risk place
 """
 import time
 from collections import defaultdict, deque
@@ -18,7 +19,9 @@ from pydantic import BaseModel, Field, field_validator
 import audit
 import auth
 import db
+import exit_route
 import flood_analysis
+import geocode
 import safe_route
 from providers.routing.base import RoutePoint
 
@@ -174,3 +177,21 @@ async def safe_route_reassess(body: ReassessIn, response: Response, user: dict =
                 out["suggestion"] = None
                 out["suggestion_error"] = exc.detail
         return out
+
+
+class ExitIn(BaseModel):
+    model_config = {"extra": "forbid"}
+    origin: PlaceIn
+
+
+@router.post("/routes/exit")
+async def exit_plan(body: ExitIn, user: dict = Depends(auth.current_user)):
+    """From where the person is, the quickest real road route out of the area RiskN ResQ currently flags for flooding
+    (zone alerts including SIMULATED DRILLs, high-risk cells, satellite detections, credible flood reports)."""
+    _limit(f"route:{user['id']}", 12)
+    o = RoutePoint(latitude=body.origin.latitude, longitude=body.origin.longitude)
+    with db.session() as c:
+        try:
+            return await exit_route.plan_exit(c, routing_provider, o, geocode.reverse)
+        except safe_route.RoutingFailed as f:
+            raise HTTPException(f.status, f.message, headers={"Retry-After": str(f.retry_after)} if f.retry_after else None)
