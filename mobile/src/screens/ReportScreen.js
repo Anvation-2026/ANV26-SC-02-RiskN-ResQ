@@ -9,6 +9,7 @@ import {
   Text,
   TextInput,
   View,
+  Linking,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Feather from '@expo/vector-icons/Feather';
@@ -17,15 +18,50 @@ import ActionButton from '../components/ActionButton';
 import { useData } from '../context/DataContext';
 import { AnimatedBar, FadeIn, PopIn } from '../components/motion';
 import * as ImagePicker from 'expo-image-picker';
-import { newRequestKey, submitIncident, uploadIncidentPhoto } from '../services/api';
+import { getMyReports, newRequestKey, submitIncident, uploadIncidentPhoto } from '../services/api';
 import { colors, radius, shadow } from '../theme';
 
 const TYPES = [
-  { key: 'FLOODED_ROAD', label: 'Flood Hazard', icon: 'droplet' },
-  { key: 'BLOCKED_ROAD', label: 'Blocked Road', icon: 'alert-triangle' },
+  { key: 'FLOOD', label: 'Flooding', icon: 'droplet' },
+  { key: 'FLOODED_ROAD', label: 'Flooded Road', icon: 'navigation' },
   { key: 'WATERLOGGING', label: 'Waterlogging', icon: 'cloud-rain' },
+  { key: 'BLOCKED_ROAD', label: 'Blocked Road', icon: 'alert-triangle' },
   { key: 'FALLEN_TREE', label: 'Tree / Debris', icon: 'slash' },
+  { key: 'LANDSLIDE', label: 'Landslide', icon: 'trending-down' },
+  { key: 'INFRASTRUCTURE_DAMAGE', label: 'Infrastructure Damage', icon: 'tool' },
+  { key: 'PERSON_IN_DANGER', label: 'Person in Danger', icon: 'user-x' },
+  { key: 'EMERGENCY', label: 'Other Emergency', icon: 'alert-octagon' },
 ];
+
+// where a report stands, from the server's status (and duplicate link): received → under review → verified / rejected → resolved
+const REPORT_STATUS = {
+  REPORTED: ['Under review', '#B45309'], VERIFIED: ['Verified', '#16A34A'], REJECTED: ['Rejected', '#DC2626'], RESOLVED: ['Resolved', '#475569'],
+};
+
+function MyReports({ refreshKey }) {
+  const [items, setItems] = React.useState(null);
+  const [error, setError] = React.useState(false);
+  React.useEffect(() => {
+    let alive = true;
+    getMyReports().then((r) => { if (alive) { setItems(Array.isArray(r) ? r : []); setError(false); } }).catch(() => { if (alive) setError(true); });
+    return () => { alive = false; };
+  }, [refreshKey]);
+  if (error) return <Text style={styles.myEmpty}>Your reports could not be loaded right now.</Text>;
+  if (!items) return null;
+  if (!items.length) return <Text style={styles.myEmpty}>You have not sent any reports yet.</Text>;
+  return items.slice(0, 6).map((r) => {
+    const [word, color] = r.duplicate_of ? ['Matched existing report #' + r.duplicate_of, '#0E7490'] : (REPORT_STATUS[r.status] || [r.status, '#475569']);
+    return (
+      <View key={r.id} style={styles.myRow}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.myTitle}>{String(r.type).replace(/_/g, ' ').toLowerCase().replace(/^./, (c) => c.toUpperCase())} · #{r.id}</Text>
+          <Text style={styles.mySub}>Received {new Date(r.timestamp || r.created_at).toLocaleString()}{r.trust_score != null ? ` · trust ${r.trust_score}/100` : ''}</Text>
+        </View>
+        <View style={[styles.myPill, { backgroundColor: color + '1A' }]}><Text style={[styles.myPillText, { color }]}>{word}</Text></View>
+      </View>
+    );
+  });
+}
 
 export const Chip = ({ active, onPress, children }) => (
   <Pressable
@@ -180,6 +216,12 @@ export default function ReportScreen({ navigate }) {
             </View>
           ) : (
             <>
+              {type === 'PERSON_IN_DANGER' ? (
+                <Pressable style={styles.sos} onPress={() => Linking.openURL('tel:112').catch(() => {})} accessibilityRole="button" accessibilityLabel="Call 112">
+                  <Feather name="phone-call" size={16} color="#fff" />
+                  <Text style={styles.sosText}>Someone in danger? Call 112 first, then send this report.</Text>
+                </Pressable>
+              ) : null}
               <Text style={styles.label}>INCIDENT CLASSIFICATION</Text>
               <View style={styles.types}>
                 {TYPES.map((t) => {
@@ -303,6 +345,8 @@ export default function ReportScreen({ navigate }) {
               </View>
             </>
           )}
+          <Text style={styles.myHead}>MY REPORTS</Text>
+          <MyReports refreshKey={done ? 'after' : 'before'} />
         </ScrollView>
       </KeyboardAvoidingView>
     </View>
@@ -310,6 +354,15 @@ export default function ReportScreen({ navigate }) {
 }
 
 const styles = StyleSheet.create({
+  myHead: { fontFamily: 'PlusJakartaSans_800ExtraBold', fontSize: 12, letterSpacing: 0.8, color: colors.muted, marginTop: 24, marginBottom: 8 },
+  myEmpty: { fontFamily: 'PlusJakartaSans_500Medium', fontSize: 13, color: colors.muted },
+  myRow: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: colors.card, borderRadius: 14, padding: 12, marginBottom: 8, borderWidth: 1, borderColor: '#E2E8F0' },
+  myTitle: { fontFamily: 'PlusJakartaSans_700Bold', fontSize: 13, color: colors.text },
+  mySub: { fontFamily: 'PlusJakartaSans_500Medium', fontSize: 11, color: colors.muted, marginTop: 2 },
+  myPill: { borderRadius: 999, paddingHorizontal: 9, paddingVertical: 3, maxWidth: 150 },
+  myPillText: { fontFamily: 'PlusJakartaSans_800ExtraBold', fontSize: 10, letterSpacing: 0.3 },
+  sos: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#DC2626', borderRadius: 14, padding: 12, marginBottom: 12 },
+  sosText: { flex: 1, color: '#fff', fontFamily: 'PlusJakartaSans_700Bold', fontSize: 13, lineHeight: 18 },
   uploadText: { fontFamily: 'PlusJakartaSans_600SemiBold', fontSize: 12, color: colors.muted, marginTop: 6 },
   photoRow: { flexDirection: 'row', gap: 10 },
   photoBtn: { flex: 1, justifyContent: 'center' },

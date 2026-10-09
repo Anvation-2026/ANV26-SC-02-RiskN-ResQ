@@ -1,6 +1,7 @@
 """Creates real records through the API, RESTARTS the backend, and checks they are still there; then checks that /reset clears
 only runtime state. Runs against the isolated E2E backend (scripts/e2e_backend.sh), never production data.
     scripts/e2e_backend.sh start && python scripts/persistence_check.py"""
+import os
 import subprocess
 import sys
 import time
@@ -8,7 +9,7 @@ from pathlib import Path
 
 import httpx
 
-BASE = "http://127.0.0.1:8000"
+BASE = f"http://127.0.0.1:{os.environ.get('E2E_PORT', '8000')}"
 HERE = {"latitude": 12.9716, "longitude": 77.5946}
 ADMIN = {"email": "e2e-admin@test.local", "password": "E2e-admin-pass-1"}
 USER = {"name": "Persist User", "email": f"persist{int(time.time())}@test.local", "password": "Persist-pass-123"}

@@ -12,7 +12,8 @@ const API_URL_OVERRIDE = null;
 const ENV_API_URL = process.env.EXPO_PUBLIC_API_URL;
 
 function detectBaseUrl() {
-  if (ENV_API_URL) return ENV_API_URL.replace(/\/+$/, '');
+  // a bare host (as Render's fromService provides) means https://host
+  if (ENV_API_URL) { const u = ENV_API_URL.trim().replace(/\/+$/, ''); return /^https?:\/\//i.test(u) ? u : `https://${u}`; }
   if (API_URL_OVERRIDE) return API_URL_OVERRIDE;
   // A release build has no dev server to learn the address from. Falling back to localhost would silently point the phone at
   // itself, so a release build without EXPO_PUBLIC_API_URL has no server address and says so (see http() in services/api.js).

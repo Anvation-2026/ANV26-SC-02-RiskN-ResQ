@@ -4,23 +4,48 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Feather from '@expo/vector-icons/Feather';
 import { ScreenFade, TabIcon } from '../components/motion';
 import { colors, fonts } from '../theme';
+import AIAssistantModal from '../components/AIAssistantModal';
+import AIAssistantFAB from '../components/AIAssistantFAB';
 
-// Bottom-tab shell used by the admin app. All tabs stay mounted so forms keep their state.
+// Bottom-tab shell used by the admin and volunteer apps. All tabs stay mounted so forms keep their state.
 export default function TabShell({ tabs, badges = {}, onTabChange }) {
   const [active, setActiveRaw] = useState(tabs[0].key);
   const [params, setParams] = useState({});
-  const setActive = (k, p) => { setParams((cur) => ({ ...cur, [k]: p })); setActiveRaw(k); if (onTabChange) onTabChange(k); };
+  const [aiVisible, setAiVisible] = useState(false);
+  const setActive = (k, p) => {
+    if (k === 'AI' || k === 'Assistant') {
+      setAiVisible(true);
+      return;
+    }
+    setParams((cur) => ({ ...cur, [k]: p }));
+    setActiveRaw(k);
+    if (onTabChange) onTabChange(k);
+  };
   const insets = useSafeAreaInsets();
+  const bottomPadding = Math.max(insets.bottom, 10);
+
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
       <View style={{ flex: 1 }}>
         {tabs.map(({ key, Screen }) => (
           <View key={key} style={[StyleSheet.absoluteFill, active !== key && { display: 'none' }]}>
-            <ScreenFade active={active === key}><Screen navigate={setActive} active={active === key} params={params[key]} /></ScreenFade>
+            <ScreenFade active={active === key}><Screen navigate={setActive} active={active === key} params={params[key]} openAI={() => setAiVisible(true)} /></ScreenFade>
           </View>
         ))}
       </View>
-      <View style={[styles.bar, { paddingBottom: Math.max(insets.bottom, 10) }]}>
+
+      <AIAssistantFAB
+        onPress={() => setAiVisible(true)}
+        bottom={bottomPadding + 56}
+      />
+
+      <AIAssistantModal
+        visible={aiVisible}
+        onClose={() => setAiVisible(false)}
+        onNavigate={setActive}
+      />
+
+      <View style={[styles.bar, { paddingBottom: bottomPadding }]}>
         {tabs.map((t) => (
           <Pressable key={t.key} style={styles.tab} onPress={() => setActive(t.key)} hitSlop={6} accessibilityRole="tab" accessibilityLabel={t.label} accessibilityState={{ selected: active === t.key }} aria-selected={active === t.key}>
             <TabIcon active={active === t.key} color={colors.primary} badge={badges[t.key] || 0} compact={tabs.length > 6}>

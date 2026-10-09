@@ -5,7 +5,7 @@ import ActionButton from '../components/ActionButton';
 import DeviceCheck from '../components/DeviceCheck';
 import { Card, ErrorText, Field, Label, Pill, Segmented, SmallButton } from '../components/ui';
 import { errorText, useAuth } from '../context/AuthContext';
-import { resendVerification, updatePreferences, verifyEmail } from '../services/accountApi';
+import { updatePreferences } from '../services/accountApi';
 import { LANGUAGES } from '../i18n/strings';
 import { useLang } from '../i18n';
 import { colors, fonts } from '../theme';
@@ -15,7 +15,6 @@ const ROLE_LABEL = { user: 'Normal user', volunteer: 'Volunteer', admin: 'Super 
 export default function AccountScreen() {
   const { user, logout, updateUser } = useAuth();
   const { t, lang, setLang } = useLang();
-  const [code, setCode] = useState('');
   const [phone, setPhone] = useState(user.phone || '');
   const [sms, setSms] = useState(!!user.notify_sms);
   const [msg, setMsg] = useState('');
@@ -29,8 +28,6 @@ export default function AccountScreen() {
   };
   const changeLang = (l) => { setLang(l); updatePreferences({ language: l }).then((u) => updateUser(u)).catch(() => {}); };
   const savePrefs = () => run(async () => updateUser(await updatePreferences({ phone, notify_sms: sms })), 'Saved.');
-  const verify = () => run(async () => { await verifyEmail(code.trim()); updateUser({ email_verified: true }); setCode(''); });
-  const resend = () => run(() => resendVerification(), 'A new code has been sent to your email.');
 
   return (
     <View style={{ flex: 1 }}>
@@ -41,18 +38,8 @@ export default function AccountScreen() {
           <View style={{ marginTop: 6, marginBottom: 14 }}><Pill text={ROLE_LABEL[user.role] || user.role} color={colors.primary} /></View>
           <Label>EMAIL</Label>
           <Text style={styles.value}>{user.email}</Text>
-          {user.email_verified ? <Pill text={t('account.verified')} color={colors.LOW} /> : null}
+          {user.email_verified ? <Pill text={t('account.verified')} color={colors.LOW} /> : <Text style={styles.help}>Your email is verified the first time you sign in with an email code.</Text>}
         </Card>
-
-        {!user.email_verified && (
-          <Card>
-            <Text style={styles.h}>{t('account.verify')}</Text>
-            <Text style={styles.help}>{t('account.verifyHelp')}</Text>
-            <ErrorText>{error}</ErrorText>
-            <Field label="CODE" value={code} onChangeText={setCode} keyboardType="number-pad" maxLength={6} placeholder="123456" />
-            <View style={styles.row}><SmallButton label="Verify" disabled={busy || code.trim().length < 4} onPress={verify} /><SmallButton label={t('account.resend')} outline disabled={busy} onPress={resend} /></View>
-          </Card>
-        )}
 
         <Card>
           <Text style={styles.h}>{t('account.language')}</Text>
@@ -66,7 +53,7 @@ export default function AccountScreen() {
             <Text style={styles.switchText}>{t('account.sms')}</Text>
             <Switch value={sms} onValueChange={setSms} accessibilityLabel={t('account.sms')} />
           </View>
-          <ErrorText>{error && user.email_verified ? error : ''}</ErrorText>
+          <ErrorText>{error}</ErrorText>
           {msg ? <Text style={styles.ok}>{msg}</Text> : null}
           <SmallButton label={t('account.save')} disabled={busy} onPress={savePrefs} />
         </Card>

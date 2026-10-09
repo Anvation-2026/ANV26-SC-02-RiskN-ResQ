@@ -1,17 +1,20 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { Platform } from 'react-native';
 import { POLL_MS, USE_DEVICE_LOCATION } from '../config/api';
 import { getIntelligenceOverview, getPlaces, getRoadStatus, getWeatherMonitoring, getZoneAlerts, syncTelemetry } from '../services/api';
 import { saveMyLocation } from '../services/accountApi';
 import { loadJSON, saveJSON } from '../services/storage';
 import {
-  checkLocationPermission,
   requestLocationPermission,
   getLiveCurrentPosition,
+  getLocationState,
+  openLocationSettings,
   subscribeToLiveLocation,
   reverseGeocodeLocation,
   formatCoordinates,
   setManualLocation,
 } from '../services/locationService';
+import { haversineKm } from '../services/geo';
 
 const CACHE_KEY = 'risknresq_cache_v1';
 const DataContext = createContext(null);
@@ -20,7 +23,13 @@ export const useData = () => useContext(DataContext);
 export function DataProvider({ children }) {
   const [userLocation, setUserLocation] = useState(null);
   const [locationLabel, setLocationLabel] = useState('Acquiring GPS...');
-  const [locationStatus, setLocationStatus] = useState('undetermined');
+  // 'checking' | 'granted' | 'undetermined' | 'denied' | 'blocked' | 'services_off' | 'error' | 'manual'
+  const [locationStatus, setLocationStatus] = useState('checking');
+  const [locationMeta, setLocationMeta] = useState(null); // { accuracy (m), timestamp, source: 'gps' | 'last_known' | 'manual' }
+  const [gateDismissed, setGateDismissed] = useState(false);
+  const [locBusy, setLocBusy] = useState(false);
+  const locRef = useRef(null);       // the latest position, read by refresh() without re-creating it on every GPS update
+  const labelAt = useRef(null);      // where the place name was last looked up (re-geocode only after moving ~200 m)
   const [loading, setLoading] = useState(true);
   const [risk, setRisk] = useState(null);
   const [weather, setWeather] = useState(null);
@@ -46,36 +55,36 @@ export function DataProvider({ children }) {
 
   const busyRef = useRef(false);
 
-  // 1. Initialise device location
-  const initLocation = useCallback(async () => {
-    try {
-      const status = await checkLocationPermission();
-      setLocationStatus(status);
-      if (status === 'granted') {
-        const loc = await getLiveCurrentPosition();
-        setUserLocation(loc);
-        const label = await reverseGeocodeLocation(loc.latitude, loc.longitude);
-        setLocationLabel(label);
-      } else {
-        const reqStatus = await requestLocationPermission();
-        setLocationStatus(reqStatus);
-        if (reqStatus === 'granted') {
-          const loc = await getLiveCurrentPosition();
-          setUserLocation(loc);
-          const label = await reverseGeocodeLocation(loc.latitude, loc.longitude);
-          setLocationLabel(label);
-        } else {
-          setLocationStatus('denied');
-          setLocationLabel('Location Permission Required');
-          setLoading(false);
-        }
-      }
-    } catch (e) {
-      setLocationStatus('denied');
-      setLocationLabel('Location Permission Required');
-      setLoading(false);
+  // 1. Device location. Nothing is asked silently: if permission is not decided yet, LocationGate explains why and asks.
+  const applyFix = useCallback(async (loc) => {
+    locRef.current = loc;
+    setUserLocation(loc);
+    setLocationMeta({ accuracy: loc.accuracy, timestamp: loc.timestamp || Date.now(), source: loc.source || 'gps' });
+    if (!labelAt.current || haversineKm(labelAt.current.latitude, labelAt.current.longitude, loc.latitude, loc.longitude) > 0.2) {
+      labelAt.current = loc;
+      setLocationLabel(await reverseGeocodeLocation(loc.latitude, loc.longitude));
     }
   }, []);
+
+  const startGps = useCallback(async () => {
+    setLocationStatus('granted');
+    setLocationLabel('Finding your location…');
+    try {
+      await applyFix(await getLiveCurrentPosition());
+    } catch (e) {
+      setLocationStatus('error');
+      setLocationLabel(e && e.message === 'LOCATION_TIMEOUT' ? 'GPS signal not found yet' : 'Location unavailable');
+      setLoading(false);
+    }
+  }, [applyFix]);
+
+  const initLocation = useCallback(async () => {
+    const state = await getLocationState();
+    setLocationStatus(state);
+    if (state === 'granted') return startGps();
+    setLocationLabel(state === 'services_off' ? 'Location Services are off' : 'Location not shared');
+    setLoading(false);
+  }, [startGps]);
 
   useEffect(() => {
     if (USE_DEVICE_LOCATION) {
@@ -83,20 +92,43 @@ export function DataProvider({ children }) {
     }
   }, [initLocation]);
 
-  // 2. Subscribe to live position updates
+  // "Allow location": the system dialog appears now, after the explanation
+  const askLocation = useCallback(async () => {
+    setLocBusy(true);
+    try {
+      await requestLocationPermission();
+      let state = await getLocationState();
+      if (state === 'denied' && Platform.OS === 'web') state = 'blocked'; // a browser that refused will not show its prompt again
+      if (state === 'blocked') setGateDismissed(false);                    // explain how to turn it back on
+      if (state === 'granted') await startGps();
+      else { setLocationStatus(state === 'undetermined' ? 'denied' : state); setLocationLabel('Location not shared'); setLoading(false); }
+    } finally {
+      setLocBusy(false);
+    }
+  }, [startGps]);
+
+  // after the person changed Settings or turned Location Services on
+  const retryLocation = useCallback(async () => {
+    setLocBusy(true);
+    try { await initLocation(); } finally { setLocBusy(false); }
+  }, [initLocation]);
+
+  const dismissLocationGate = useCallback(() => {
+    setGateDismissed(true);
+    setLocationStatus((st) => (st === 'undetermined' ? 'denied' : st));
+  }, []);
+
+  // 2. Follow the device while the app is open (high accuracy, every ~10 m / 4 s)
   useEffect(() => {
     if (locationStatus === 'granted') {
-      const unsub = subscribeToLiveLocation(async (loc) => {
-        setUserLocation(loc);
-        const label = await reverseGeocodeLocation(loc.latitude, loc.longitude);
-        setLocationLabel(label);
-      });
+      const unsub = subscribeToLiveLocation((loc) => { applyFix(loc); });
       return unsub;
     }
-  }, [locationStatus]);
+  }, [locationStatus, applyFix]);
 
   // 3. Sync telemetry with backend
   const refresh = useCallback(async () => {
+    const userLocation = locRef.current;
     if (!userLocation) return;
     if (busyRef.current) return;
     busyRef.current = true;
@@ -150,7 +182,7 @@ export function DataProvider({ children }) {
       busyRef.current = false;
       setLoading(false);
     }
-  }, [userLocation]);
+  }, []);
 
   // Tell the backend where this user last was (used only to decide who receives an area alert), at most every 5 minutes.
   useEffect(() => {
@@ -169,34 +201,38 @@ export function DataProvider({ children }) {
     return () => clearInterval(id);
   }, [userLocation && Math.round(userLocation.latitude * 20), userLocation && Math.round(userLocation.longitude * 20)]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // poll every POLL_MS; moving ~100 m (3rd decimal of a degree) refreshes straight away, smaller GPS jitter does not
+  const coarse = userLocation ? `${userLocation.latitude.toFixed(3)},${userLocation.longitude.toFixed(3)}` : null;
   useEffect(() => {
-    if (userLocation) {
+    if (coarse) {
       refresh();
       const interval = setInterval(refresh, POLL_MS);
       return () => clearInterval(interval);
     }
-  }, [userLocation, refresh]);
+  }, [coarse, refresh]);
 
   // 4. Manual location fallback if permission denied
   const applyManualLocation = useCallback(async (lat, lng, customLabel = null) => {
-    const loc = { latitude: lat, longitude: lng, accuracy: 10, timestamp: Date.now() };
+    const loc = { latitude: lat, longitude: lng, accuracy: null, timestamp: Date.now(), source: 'manual' };
     setManualLocation(loc);
+    locRef.current = loc;
     setUserLocation(loc);
+    setLocationMeta({ accuracy: null, timestamp: loc.timestamp, source: 'manual' });
     setLocationStatus('manual');
     const label = customLabel || (await reverseGeocodeLocation(lat, lng)) || formatCoordinates(lat, lng);
     setLocationLabel(label);
   }, []);
 
+  // the "Enable location" buttons on Home, Report and Help: ask, or send the person to Settings when the system will not ask again
   const requestPermission = useCallback(async () => {
-    const status = await requestLocationPermission();
-    setLocationStatus(status);
-    if (status === 'granted') {
-      const loc = await getLiveCurrentPosition();
-      setUserLocation(loc);
-      const label = await reverseGeocodeLocation(loc.latitude, loc.longitude);
-      setLocationLabel(label);
+    const state = await getLocationState();
+    if (state === 'blocked' || state === 'services_off') {
+      setGateDismissed(false);
+      setLocationStatus(state);
+      return;
     }
-  }, []);
+    await askLocation();
+  }, [askLocation]);
 
   const SEVERITY_RANK = { LOW: 1, MEDIUM: 2, MODERATE: 2, HIGH: 3, CRITICAL: 4 };
   const rank = (lvl) => SEVERITY_RANK[lvl] || 0;
@@ -274,6 +310,13 @@ export function DataProvider({ children }) {
     userLocation,
     locationLabel,
     locationStatus,
+    locationMeta,
+    locBusy,
+    showLocationGate: !gateDismissed && ['undetermined', 'blocked', 'services_off'].includes(locationStatus),
+    askLocation,
+    retryLocation,
+    dismissLocationGate,
+    openLocationSettings,
     risk: effectiveRisk,
     gpsRisk: risk,
     weather,

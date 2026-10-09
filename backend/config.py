@@ -20,7 +20,8 @@ if raw_cors == "*":
 elif not raw_cors:
     CORS_ORIGINS = ["*"] if not _proxied else []
 else:
-    CORS_ORIGINS = [origin.strip() for origin in raw_cors.split(",") if origin.strip()]
+    # a bare host (as Render's fromService provides) becomes https://host; a full origin is kept as written
+    CORS_ORIGINS = [o if o.startswith(("http://", "https://")) else f"https://{o}" for o in (x.strip().rstrip("/") for x in raw_cors.split(",")) if o]
 
 
 # ---- Weather monitoring grid (backend polls the weather provider; clients only read the cached result) ----
@@ -75,3 +76,9 @@ SAT_ABNORMAL_MIN_KM2 = float(os.getenv("SAT_ABNORMAL_MIN_KM2", "0.5"))  # smalle
 SAT_ABNORMAL_MIN_PCT = float(os.getenv("SAT_ABNORMAL_MIN_PCT", "40"))  # and at least this much relative to the baseline scenes
 SATELLITE_STALE_DAYS = float(os.getenv("SATELLITE_STALE_DAYS", "14"))
 PLANETARY_COMPUTER_URL = os.getenv("PLANETARY_COMPUTER_URL", "https://planetarycomputer.microsoft.com/api").strip()
+
+# ---- AI Assistant (Gemini / OpenAI / Grounded Engine) ----
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip() or None
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip() or None
+AI_MODEL = os.getenv("AI_MODEL", "").strip() or None
+AI_PROVIDER = os.getenv("AI_PROVIDER", "auto").strip().lower()

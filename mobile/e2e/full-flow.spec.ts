@@ -44,6 +44,7 @@ test('user registers and reads weather, risk, explanation and risk history', asy
   await page.getByText('CREATE ACCOUNT', { exact: true }).click();
   await expect(text(page, 'CURRENT WEATHER')).toBeVisible({ timeout: 90_000 });
   await expect(text(page, 'FLOOD INTELLIGENCE')).toBeVisible({ timeout: 60_000 });
+  await expect(text(page, /^LIVE( ±\d+ m)?$/)).toBeVisible();                     // real-time GPS (accuracy shown when the device reports it)
   await expect(text(page, /Probability \d+% \(prototype\)/)).toBeVisible();
   await expect(text(page, /^Confidence: (High|Medium|Low)$/)).toBeVisible();       // data confidence from the backend
   await expect(text(page, 'WHY THIS RISK?')).toBeVisible();
@@ -90,8 +91,19 @@ test('user map: every layer toggles, details open, evacuation route', async ({ p
   await tab(page, 'Map').click();
   await expect(page.locator('.leaflet-container')).toBeVisible({ timeout: 60_000 });
   await expect(page.locator('.leaflet-tile-loaded').first()).toBeVisible({ timeout: 60_000 });
+  // basemaps: satellite (photo mosaic, labelled not live) and NASA's image of today (dated), with NASA flood detection on
+  await page.getByRole('tab', { name: 'Basemap Satellite', exact: true }).click();
+  await expect(text(page, 'NOT LIVE')).toBeVisible({ timeout: 30_000 });
+  await expect(text(page, 'NASA flood detection')).toBeVisible();
+  await expect(page.locator('img.leaflet-tile[src*="World_Imagery"]').first()).toBeAttached({ timeout: 30_000 });
+  await page.getByRole('tab', { name: 'Basemap Today (NASA)', exact: true }).click();
+  await expect(text(page, /^DAILY · /)).toBeVisible();
+  await expect(page.locator('img.leaflet-tile[src*="VIIRS_SNPP_CorrectedReflectance"]').first()).toBeAttached({ timeout: 30_000 });
+  await page.getByRole('tab', { name: 'Basemap Map', exact: true }).click();
+  await expect(page.locator('img.leaflet-tile[src*="tile.openstreetmap.org"]').first()).toBeAttached({ timeout: 30_000 });
+  await page.getByRole('switch', { name: 'NASA flood', exact: true }).click();          // flood detection off again
   await expect(text(page, 'MAP LAYERS')).toBeVisible();
-  for (const name of ['Flood risk', 'Rainfall', 'Satellite', 'Hotspots', 'Road risk', 'Terrain', 'Incidents', 'Hospitals', 'Shelters', 'Volunteers']) {
+  for (const name of ['Flood risk', 'Rainfall', 'Satellite', 'Hotspots', 'Road risk', 'Terrain', 'Incidents', 'Hospitals', 'Shelters', 'Volunteers', 'NASA flood', 'Radar water']) {
     const sw = page.getByRole('switch', { name, exact: true });
     const before = await sw.getAttribute('aria-checked');
     await sw.click();
@@ -133,7 +145,7 @@ test('user reports an incident with a real photo', async ({ page }) => {
   await login(page, USER);
   await expect(text(page, 'CURRENT WEATHER')).toBeVisible({ timeout: 90_000 });
   await tab(page, 'Report').click();
-  await page.getByText('Flood Hazard').click();
+  await page.getByText('Flooded Road', { exact: true }).click();
   await page.getByPlaceholder('Describe water depth, obstruction, or damage...').fill('E2E: knee-deep water near the junction');
   const chooser = page.waitForEvent('filechooser');
   await page.getByText('Choose photo').click();
@@ -144,6 +156,8 @@ test('user reports an incident with a real photo', async ({ page }) => {
   await expect(text(page, /pending administrator review/)).toBeVisible();          // verification status from the backend
   await expect(text(page, 'Photo uploaded with your report.')).toBeVisible();
   await expect(page.locator('body')).toContainText(/one report on its own does not declare a flood/i);
+  await expect(text(page, 'MY REPORTS')).toBeVisible();
+  await expect(text(page, /^(Under review|Matched existing report #\d+)$/)).toBeVisible({ timeout: 15_000 });   // review status (or the duplicate it was merged into)
 });
 
 test('user asks for medicine and the nearby volunteer is matched', async ({ page }) => {
@@ -279,13 +293,25 @@ test('role protection: a normal user and a volunteer are refused admin APIs', as
   expect(wrong.status).toBe(403); // a normal user cannot use the volunteer API
 });
 
-test('GPS denied: the app explains and offers a manual location', async ({ browser }) => {
+test('GPS not allowed: the app explains why, asks only on request, and offers a sample location', async ({ browser }) => {
   const ctx = await browser.newContext({ permissions: [], geolocation: undefined, viewport: { width: 430, height: 900 } });
   const page = await ctx.newPage();
   await openApp(page);
   await login(page, USER);
-  await expect(page.locator('body')).toContainText(/Location Permission Required|Enable Location|Use Bengaluru instead/, { timeout: 90_000 });
-  await page.getByText(/Use Bengaluru instead/).click();
+  // no permission yet: the app explains why before anything is asked, and "Not now" leaves a clear way back
+  // (a browser that has not been asked shows the explanation first; this headless browser starts out refusing, so the
+  // banner appears straight away; either way nothing is asked silently)
+  await expect(text(page, /Allow your location|Location not shared/)).toBeVisible({ timeout: 90_000 });
+  if (await page.getByText('Allow your location').isVisible()) {
+    await expect(text(page, 'Flood risk where you are')).toBeVisible();
+    await page.getByText('Not now', { exact: true }).click();
+  }
+  await expect(text(page, 'Location not shared')).toBeVisible({ timeout: 30_000 });
+  await page.getByText('Allow location', { exact: true }).click();                     // the browser still refuses: say how to fix it
+  await expect(text(page, 'Location is turned off for RiskN ResQ')).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('body')).toContainText('lock icon in the address bar');
+  await page.getByText('Not now', { exact: true }).click();
+  await page.getByText(/Use a sample location instead/).click();
   await expect(text(page, 'CURRENT WEATHER')).toBeVisible({ timeout: 90_000 });
   await ctx.close();
 });

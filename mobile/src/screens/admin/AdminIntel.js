@@ -9,7 +9,7 @@ import { getAdminSummary, getMlStatus, getPositioning, getProviders, getResource
 import { colors, fonts } from '../../theme';
 
 const STATE = { OK: ['ONLINE', colors.LOW, 'Updated'], STALE: ['STALE', '#B45309', 'Stale, last success'], DEGRADED: ['STALE', '#B45309', 'Partly failing, last success'],
-  UNAVAILABLE: ['UNAVAILABLE', colors.HIGH, 'Unavailable'], NOT_RUN: ['UNAVAILABLE', colors.muted, 'Not run yet'] };
+  UNAVAILABLE: ['UNAVAILABLE', colors.HIGH, 'Unavailable'], NOT_RUN: ['UNAVAILABLE', colors.muted, 'Not run yet'], NOT_CONNECTED: ['NOT CONNECTED', colors.muted, 'Not connected'] };
 const NAMES = { weather: 'WEATHER', satellite: 'SATELLITE', terrain: 'TERRAIN (DEM)', water_level: 'RIVER / FLOOD MODEL', climatology: 'RAINFALL HISTORY' };
 const KIND = { weather: 'Real-time observation + forecast (Open-Meteo)', satellite: 'Periodic satellite pass (Sentinel-1 SAR, Microsoft Planetary Computer)',
   terrain: 'Static elevation model (Copernicus DEM)', water_level: 'MODELLED river discharge (GloFAS), not a gauge', climatology: '10-year reanalysis (ERA5)' };
@@ -69,6 +69,21 @@ export default function AdminIntel() {
                     <Text style={[styles.line, { color }]}>{p.state === 'OK' || p.age_minutes != null ? `${word} ${p.age_minutes != null ? ago(p.last_success) : ''}` : word}</Text>
                     {p.detail ? <Text style={styles.line}>{p.detail}</Text> : null}
                     {p.last_error ? <Text style={[styles.line, { color: colors.HIGH }]}>Last error: {p.last_error}</Text> : null}
+                  </View>
+                </View>
+              );
+            })}
+            {(d.other_sources || []).map((p) => {
+              const [badge, color] = STATE[p.state] || STATE.NOT_RUN;
+              return (
+                <View key={p.name} style={styles.prov}>
+                  <View style={{ flex: 1 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      <Text style={styles.name}>{(p.label || p.name).toUpperCase()}</Text>
+                      <View style={[styles.badge, { backgroundColor: color + '22', borderColor: color }]}><Text style={[styles.badgeText, { color }]}>{badge}</Text></View>
+                    </View>
+                    {p.detail ? <Text style={styles.line}>{p.detail}</Text> : null}
+                    {p.last_success ? <Text style={styles.line}>Last import {ago(p.last_success)}</Text> : null}
                   </View>
                 </View>
               );

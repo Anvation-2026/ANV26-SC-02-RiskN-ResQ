@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Pressable,
   ScrollView,
@@ -17,7 +17,7 @@ import ErrorBoundary from '../components/ErrorBoundary';
 import { useResponse } from '../context/ResponseContext';
 import { useData } from '../context/DataContext';
 import { ago, rainLabel, RAIN_LABEL, RISK_COLOR, SAT_COLOR } from '../components/rain';
-import { getFloodRiskAt, getNearestEvacuation } from '../services/api';
+import { getFloodRiskAt, getNearestEvacuation, getSatelliteImagery } from '../services/api';
 import { useT } from '../i18n';
 import { Sheet } from '../components/ui';
 import { ROUTE_NOTE } from '../services/copy';
@@ -30,11 +30,13 @@ const MODES = [
   ['response', 'Corridor & Response'],
 ];
 
-export default function MapScreen() {
+export default function MapScreen({ params }) {
   const insets = useSafeAreaInsets();
   const { height: screenHeight } = useWindowDimensions();
   const { userLocation, risk, blocked, roads, alternative, incidents, locationLabel, weatherMonitor, places, intel } = useData();
-  const [layers, setLayers] = useState({ risk: true, rain: true, satellite: true, hotspots: true, roads: true, terrain: false, incidents: true, hospitals: true, shelters: true, volunteers: true });
+  const [layers, setLayers] = useState({ risk: true, rain: true, satellite: true, hotspots: true, roads: true, terrain: false, incidents: true, hospitals: true, shelters: true, volunteers: true, nasa_flood: false, radar_water: false });
+  const [basemap, setBasemap] = useState('map'); // 'map' (street) | 'satellite' (photo mosaic, not live) | 'today' (NASA daily image)
+  const [imagery, setImagery] = useState(null);
   const [roadPick, setRoadPick] = useState(null);
   const [incidentPick, setIncidentPick] = useState(null);
   const [intelPick, setIntelPick] = useState(null);
@@ -48,6 +50,30 @@ export default function MapScreen() {
   const R = useResponse();
 
   const toggle = (k) => setLayers((l) => ({ ...l, [k]: !l[k] }));
+  // the imagery catalogue (tile URLs + the real date of each NASA layer) changes at most daily
+  useEffect(() => {
+    const load = () => getSatelliteImagery().then(setImagery).catch(() => {});
+    load();
+    const id = setInterval(load, 30 * 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
+  const layerById = (id) => (imagery && Array.isArray(imagery.layers) ? imagery.layers.find((l) => l.id === id) : null);
+  const chooseBase = (b) => {
+    setBasemap(b);
+    if (b !== 'map') setLayers((l) => ({ ...l, nasa_flood: true })); // satellite views open with NASA's flood detection on
+  };
+  const baseLayer = basemap === 'map' ? null : layerById(basemap);
+  // opened from RiskN AI or another screen: show the layer it named, or run the evacuation lookup
+  useEffect(() => {
+    if (!params) return;
+    if (params.layer && Object.prototype.hasOwnProperty.call(layers, params.layer)) setLayers((l) => ({ ...l, [params.layer]: true }));
+    if (params.focusEvacuation && userLocation) findEvac();
+  }, [params]); // eslint-disable-line react-hooks/exhaustive-deps
+  const tileOverlays = [
+    layers.nasa_flood && layerById('nasa_flood') ? { ...layerById('nasa_flood'), opacity: 0.5 } : null,
+    layers.radar_water && layerById('radar_water') ? { ...layerById('radar_water'), opacity: 0.85, blend: true } : null,
+  ].filter(Boolean);
+  const shown = [baseLayer, ...tileOverlays].filter(Boolean);
   // every tapped map object (rain area, risk cell, satellite cell, hotspot, hospital/shelter, evacuation result) opens in one bottom sheet
   const sheetOpen = !!(rainPick || placePick || intelPick || evac || roadPick || incidentPick);
   const closeSheet = () => { setRainPick(null); setPlacePick(null); setIntelPick(null); setEvac(null); setRoadPick(null); setIncidentPick(null); };
@@ -155,6 +181,17 @@ export default function MapScreen() {
 
         <ConnectionBanner />
 
+        {/* BASEMAP: street map, satellite photo mosaic, or NASA's image of today */}
+        <View style={styles.baseRow} accessibilityRole="tablist">
+          {[['map', t('base.map'), 'map'], ['satellite', t('base.satellite'), 'globe'], ['today', t('base.today'), 'sun']].map(([k, label, icon]) => (
+            <Pressable key={k} onPress={() => chooseBase(k)} accessibilityRole="tab" accessibilityLabel={`Basemap ${label}`} accessibilityState={{ selected: basemap === k }} aria-selected={basemap === k}
+              disabled={k !== 'map' && !imagery} style={[styles.baseBtn, basemap === k && styles.baseBtnOn, k !== 'map' && !imagery && { opacity: 0.45 }]}>
+              <Feather name={icon} size={13} color={basemap === k ? '#fff' : '#475569'} />
+              <Text style={[styles.baseText, basemap === k && { color: '#fff' }]}>{label}</Text>
+            </Pressable>
+          ))}
+        </View>
+
         {/* DOMINANT REAL INTERACTIVE MAP */}
         <ErrorBoundary fallbackTitle="Map View Unavailable">
           <View style={styles.mapWrapper}>
@@ -184,17 +221,44 @@ export default function MapScreen() {
               onPlacePress={only(setPlacePick)}
               onRoadPress={only(setRoadPick)}
               onIncidentPress={only(setIncidentPick)}
+              basemap={baseLayer}
+              tileOverlays={tileOverlays}
             />
           </View>
         </ErrorBoundary>
 
+
+        {/* what the satellite layers on screen really are: provider, the date they show, resolution, colours */}
+        {shown.length > 0 && (
+          <View style={styles.imgCard}>
+            {shown.map((l) => (
+              <View key={l.id} style={{ marginBottom: 8 }}>
+                <View style={styles.imgHead}>
+                  <Text style={styles.imgTitle}>{l.name}</Text>
+                  <View style={[styles.imgTag, { backgroundColor: l.live ? '#DCFCE7' : '#F1F5F9' }]}>
+                    <Text style={[styles.imgTagText, { color: l.live ? '#166534' : '#475569' }]}>{l.live ? (l.date ? `DAILY · ${l.date}` : 'DAILY · LATEST DAY') : 'NOT LIVE'}</Text>
+                  </View>
+                </View>
+                <Text style={styles.imgLine}>{l.provider} · {l.resolution}</Text>
+                <Text style={styles.imgLine}>{l.note}</Text>
+                {Array.isArray(l.legend) ? (
+                  <View style={styles.imgLegend}>
+                    {l.legend.map((g) => <View key={g.label} style={styles.imgLegendItem}><View style={[styles.imgSwatch, { backgroundColor: g.color }]} /><Text style={styles.imgLegendText}>{g.label}</Text></View>)}
+                  </View>
+                ) : null}
+              </View>
+            ))}
+            <Text style={styles.imgFoot}>{imagery && imagery.message ? `${imagery.message} ` : ''}Satellite imagery shows what a satellite saw on the date given. It is not a live video feed, and our flood-risk estimate on the risk layer combines it with rainfall, terrain and reports.</Text>
+          </View>
+        )}
 
         <View style={styles.layerPanel}>
           <Text style={styles.kicker}>MAP LAYERS</Text>
           <View style={styles.layerRow}>
             {[['risk', t('layer.risk'), 'layers'], ['rain', t('layer.rain'), 'cloud-rain'], ['satellite', t('layer.satellite'), 'radio'], ['hotspots', t('layer.hotspots'), 'alert-octagon'],
               ['roads', t('layer.roads'), 'git-commit'], ['terrain', t('layer.terrain'), 'triangle'], ['incidents', t('layer.incidents'), 'alert-triangle'],
-              ['hospitals', t('layer.hospitals'), 'plus-square'], ['shelters', t('layer.shelters'), 'home'], ['volunteers', t('layer.volunteers'), 'users']].map(([k, label, icon]) => (
+              ['hospitals', t('layer.hospitals'), 'plus-square'], ['shelters', t('layer.shelters'), 'home'], ['volunteers', t('layer.volunteers'), 'users'],
+              ['nasa_flood', t('layer.nasaFlood'), 'droplet'], ['radar_water', t('layer.radarWater'), 'activity']].map(([k, label, icon]) => (
               <Pressable key={k} onPress={() => toggle(k)} accessibilityRole="switch" accessibilityState={{ checked: layers[k] }} aria-checked={!!layers[k]} accessibilityLabel={label}
                 style={[styles.layerChip, layers[k] && styles.layerChipOn]}>
                 <Feather name={layers[k] ? 'check-square' : 'square'} size={12} color={layers[k] ? '#fff' : '#64748B'} />
@@ -418,6 +482,21 @@ export default function MapScreen() {
 }
 
 const styles = StyleSheet.create({
+  baseRow: { flexDirection: 'row', backgroundColor: '#E2E8F0', borderRadius: 12, padding: 3, marginBottom: 8, gap: 3 },
+  baseBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, paddingVertical: 8, borderRadius: 9, minHeight: 36 },
+  baseBtnOn: { backgroundColor: colors.primary },
+  baseText: { fontFamily: 'PlusJakartaSans_700Bold', fontSize: 12, color: '#475569' },
+  imgCard: { backgroundColor: colors.card, borderRadius: radius.card, padding: 12, marginTop: 10, borderWidth: 1, borderColor: '#E2E8F0' },
+  imgHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  imgTitle: { fontFamily: 'PlusJakartaSans_800ExtraBold', fontSize: 13, color: colors.text, flexShrink: 1 },
+  imgTag: { borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 },
+  imgTagText: { fontFamily: 'PlusJakartaSans_800ExtraBold', fontSize: 10, letterSpacing: 0.4 },
+  imgLine: { fontFamily: 'PlusJakartaSans_500Medium', fontSize: 12, color: colors.muted, marginTop: 2, lineHeight: 17 },
+  imgLegend: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 },
+  imgLegendItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  imgSwatch: { width: 12, height: 12, borderRadius: 3, borderWidth: 1, borderColor: 'rgba(0,0,0,0.15)' },
+  imgLegendText: { fontFamily: 'PlusJakartaSans_600SemiBold', fontSize: 11, color: colors.text },
+  imgFoot: { fontFamily: 'PlusJakartaSans_500Medium', fontSize: 11, color: colors.muted, lineHeight: 16 },
   layerPanel: { backgroundColor: colors.card, borderRadius: radius.card, padding: 12, marginTop: 10, borderWidth: 1, borderColor: '#E2E8F0' },
   layerRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
   layerChip: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, borderWidth: 1, borderColor: '#CBD5E1', backgroundColor: '#fff' },

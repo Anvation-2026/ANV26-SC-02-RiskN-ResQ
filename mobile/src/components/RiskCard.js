@@ -76,7 +76,8 @@ export default function RiskCard({ risk, offline, cachedAt }) {
         </View>
 
         <View style={st.headline}>
-          <Pulse active={urgent} min={0.7} duration={900}>
+          {/* no pulsing in an emergency: steady, readable text is what helps */}
+          <Pulse active={false}>
             <View style={st.levelPill}>
               {urgent ? <Feather name="alert-triangle" size={12} color="#fff" style={{ marginRight: 5 }} /> : null}
               <Text style={st.levelPillText}>{level} FLOOD RISK</Text>
@@ -101,6 +102,11 @@ export default function RiskCard({ risk, offline, cachedAt }) {
           {updated ? <View style={st.meta}><Feather name="clock" size={11} color="#fff" /><Text style={st.metaText}>Updated {ago(updated)}</Text></View> : null}
           {risk.probability != null ? <View style={st.meta}><Text style={st.metaText}>Probability {Math.round(risk.probability * 100)}% (prototype)</Text></View> : null}
         </View>
+        {risk.evidence_tier && risk.evidence_tier !== 'NORMAL' ? (
+          <Text style={st.tierText} accessibilityLabel={`Evidence: ${risk.evidence_tier}. ${risk.evidence_tier_note || ''}`}>
+            <Text style={{ fontFamily: fonts.extrabold }}>Evidence: {risk.evidence_tier}</Text>{risk.evidence_tier_note ? ` · ${risk.evidence_tier_note}` : ''}
+          </Text>
+        ) : null}
 
         {/* rainfall now and forecast, from the same backend reading the risk used */}
         {risk.rainfall_24h_mm != null || risk.rain_1h_mm != null ? (
@@ -156,6 +162,7 @@ const st = StyleSheet.create({
   meta: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: 'rgba(0,0,0,0.22)', borderRadius: 999, paddingHorizontal: 9, paddingVertical: 4 },
   metaText: { color: '#fff', fontFamily: fonts.semibold, fontSize: 11 },
   dot: { width: 7, height: 7, borderRadius: 4 },
+  tierText: { color: 'rgba(255,255,255,0.9)', fontFamily: fonts.medium, fontSize: 12, lineHeight: 17, marginTop: 8 },
   rainRow: { flexDirection: 'row', gap: 6, marginTop: 12 },
   rainBox: { flex: 1, backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 12, paddingVertical: 8, paddingHorizontal: 9, borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)' },
   rainLabel: { color: 'rgba(255,255,255,0.75)', fontFamily: fonts.bold, fontSize: 9, letterSpacing: 0.5 },

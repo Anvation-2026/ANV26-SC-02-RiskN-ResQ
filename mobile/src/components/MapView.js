@@ -12,6 +12,7 @@ import RNMapView, {
   Polygon as RNPolygon,
   Polyline as RNPolyline,
   PROVIDER_DEFAULT,
+  UrlTile as RNUrlTile,
 } from 'react-native-maps';
 import Feather from '@expo/vector-icons/Feather';
 import { colors, radius, riskColor, shadow } from '../theme';
@@ -178,6 +179,8 @@ export default function MapView({
   onRoadPress,
   onIncidentPress,
   onMarkerPress,
+  basemap,
+  tileOverlays = [],
 }) {
   const mapRef = useRef(null);
   const userCoord = useMemo(() => normalizeCoord(user), [user]);
@@ -273,6 +276,13 @@ export default function MapView({
     }
   }, [userCoord?.latitude, userCoord?.longitude]);
 
+  // A coarse daily image (NASA ~375 m) is only meaningful at a regional zoom: step out when it is chosen.
+  useEffect(() => {
+    if (!mapRef.current || !basemap || basemap.id !== 'today') return;
+    const c = userCoord || defaultRegion;
+    mapRef.current.animateToRegion({ latitude: c.latitude, longitude: c.longitude, latitudeDelta: 0.6, longitudeDelta: 0.6 }, 400);
+  }, [basemap && basemap.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Process roads safely
   const validRoads = useMemo(() => {
     if (!Array.isArray(roads)) return [];
@@ -332,11 +342,21 @@ export default function MapView({
         style={StyleSheet.absoluteFill}
         provider={PROVIDER_DEFAULT}
         initialRegion={defaultRegion}
+        // "satellite" uses the phone's own satellite imagery (Apple / Google: a mosaic, not live); NASA's daily image is a tile layer
+        mapType={basemap && basemap.id === 'satellite' ? 'satellite' : 'standard'}
         showsUserLocation={false}
         showsCompass={true}
         showsScale={false}
         toolbarEnabled={false}
       >
+        {/* 0a. NASA daily image as the basemap, then satellite overlays (flood detection, radar water) */}
+        {basemap && basemap.id === 'today' && basemap.url ? (
+          <RNUrlTile urlTemplate={basemap.url} maximumNativeZ={basemap.max_native_zoom || 9} maximumZ={19} zIndex={-2} tileSize={256} shouldReplaceMapContent />
+        ) : null}
+        {(Array.isArray(tileOverlays) ? tileOverlays : []).filter((o) => o && o.url).map((o) => (
+          <RNUrlTile key={`ov-${o.id}`} urlTemplate={o.url} maximumNativeZ={o.max_native_zoom || 12} maximumZ={19} zIndex={-1} tileSize={256} opacity={o.opacity == null ? 0.8 : o.opacity} />
+        ))}
+
         {/* 1. FLOOD RISK ZONES (TRANSPARENT CIRCLES) */}
         {validZones.map((z, idx) => {
           const isCritical = z.level === 'CRITICAL' || z.level === 'HIGH';
@@ -519,7 +539,10 @@ export default function MapView({
           </RNMarker>
         ))}
 
-        {/* 5. REAL USER LOCATION PIN */}
+        {/* 5. REAL USER LOCATION PIN (with its GPS accuracy circle) */}
+        {userCoord && user && user.source !== 'manual' && typeof user.accuracy === 'number' && user.accuracy > 0 && user.accuracy < 2000 ? (
+          <RNCircle center={userCoord} radius={user.accuracy} strokeColor="rgba(21,101,255,0.5)" strokeWidth={1} fillColor="rgba(21,101,255,0.08)" zIndex={19} />
+        ) : null}
         {userCoord && (
           <RNMarker
             coordinate={userCoord}

@@ -106,3 +106,14 @@ def test_a_client_cannot_plant_a_photo_link(client):
     iid = u.post("/incidents", json=body).json()["id"]
     assert u.get(f"/incidents/{iid}").json()["has_photo"] is False
     assert u.get(f"/incidents/{iid}/photo").status_code == 404
+
+
+def test_cloudinary_url_is_accepted_as_well_as_the_three_variables(monkeypatch):
+    import storage
+    for k in ("CLOUDINARY_CLOUD_NAME", "CLOUDINARY_API_KEY", "CLOUDINARY_API_SECRET", "CLOUDINARY_URL"):
+        monkeypatch.delenv(k, raising=False)
+    assert storage.cloud_configured() is False
+    monkeypatch.setenv("CLOUDINARY_URL", "cloudinary://123456:s3cr3t@democloud")
+    assert storage.credentials() == ("democloud", "123456", "s3cr3t") and storage.cloud_configured() is True
+    monkeypatch.setenv("CLOUDINARY_URL", "not-a-cloudinary-url")
+    assert storage.cloud_configured() is False

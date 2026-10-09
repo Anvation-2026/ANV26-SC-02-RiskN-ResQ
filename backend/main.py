@@ -87,7 +87,8 @@ def purge_photos() -> None:
         for f in PHOTO_DIR.glob("incident_*"):
             f.unlink(missing_ok=True)
 
-IncidentType = Literal["FLOOD", "BLOCKED_ROAD", "FLOODED_ROAD", "WATERLOGGING", "FALLEN_TREE", "TRAFFIC_OBSTRUCTION", "EMERGENCY", "OTHER"]
+IncidentType = Literal["FLOOD", "BLOCKED_ROAD", "FLOODED_ROAD", "WATERLOGGING", "FALLEN_TREE", "TRAFFIC_OBSTRUCTION", "EMERGENCY", "OTHER",
+                       "LANDSLIDE", "INFRASTRUCTURE_DAMAGE", "PERSON_IN_DANGER"]  # only FLOOD / FLOODED_ROAD / BLOCKED_ROAD count as flood evidence
 IncidentStatus = Literal["REPORTED", "VERIFIED", "REJECTED", "RESOLVED"]
 Priority = Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]
 HELP_TYPES = (
@@ -144,9 +145,11 @@ app = FastAPI(
 
 import routes_account
 import routes_admin
+import routes_assistant
 app.include_router(routes_account.router)
 app.include_router(routes_admin.router)
 app.include_router(routes_intel.router)
+app.include_router(routes_assistant.router)
 if config.CORS_ORIGINS == ["*"] and hardening.TRUST_PROXY:
     logger.warning("CORS is open to every origin while TRUST_PROXY is set (a deployment): set CORS_ORIGINS to your web address.")
 app.add_middleware(hardening.RateLimitMiddleware)
@@ -458,7 +461,7 @@ def register(body: RegisterIn):
             (body.name, auth.ROLE_USER, body.email.strip().lower(), auth.hash_password(body.password), body.phone, db.now()),
         )
         row = one(c, "users", cur.lastrowid, "User")
-        routes_account.send_verification(c, row)
+        # no code is emailed here: codes are only used on the login page (signing in with one also verifies the email)
         return auth.user_public(row)
 
 
@@ -649,11 +652,15 @@ def list_incidents(
     status: Optional[IncidentStatus] = None,
     type: Optional[IncidentType] = None,
     limit: int = Query(200, ge=1, le=500),
+    mine: bool = False,
     user: dict = Depends(auth.current_user),
 ):
     c = db.conn()
     q = "SELECT * FROM incidents WHERE 1=1"  # duplicates stay listed (flagged duplicate_of) so owners and admins still see them
     args = []
+    if mine:  # the person's own reports, to follow their review status
+        q += " AND user_id=?"
+        args.append(user["id"])
     if status:
         q += " AND status=?"
         args.append(status)
@@ -2069,6 +2076,7 @@ def _intel_to_risk(a: dict, env) -> dict:
             "explanation": a["explanation"], "model": a["model"], "recommended_action": a["recommended_action"], "insufficient": False, "mode": "LIVE",
             "incident_count": a.get("report_counts", {}).get("total", 0), "verified_incidents": a.get("report_counts", {}).get("verified", 0),
             "confidence": a.get("confidence"), "confidence_basis": a.get("confidence_basis"), "computed_at": a.get("computed_at"),
+            "evidence_tier": a.get("evidence_tier"), "evidence_tier_note": a.get("evidence_tier_note"), "capped_at_high": a.get("capped_at_high", False),
             "weather_stale": bool(a.get("weather_stale")), "features": a.get("features") or {},
             "rain_1h_mm": w["rain_1h_mm"], "rain_3h_mm": w["rain_3h_mm"], "rain_6h_mm": w["rain_6h_mm"],
             "forecast_3h_mm": w["forecast_3h_mm"], "forecast_6h_mm": w["forecast_6h_mm"]}

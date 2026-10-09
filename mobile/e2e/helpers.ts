@@ -5,7 +5,7 @@ export const ADMIN = { email: 'e2e-admin@test.local', password: 'E2e-admin-pass-
 export const stamp = Date.now();
 export const USER = { name: 'E2E User', email: `e2e-user-${stamp}@test.local`, password: 'E2e-user-pass-1' };
 export const VOLUNTEER = { name: 'E2E Volunteer', email: `e2e-vol-${stamp}@test.local`, password: 'E2e-vol-pass-1', phone: '+91 98450 11111' };
-export const API = 'http://127.0.0.1:8000';
+export const API = `http://127.0.0.1:${process.env.E2E_PORT || '8000'}`;
 
 export const tab = (page: Page, name: string) => page.getByRole('tab', { name, exact: true });
 // all tabs stay mounted (hidden) in the app, so only ever match what the user can actually see

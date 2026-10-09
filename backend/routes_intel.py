@@ -13,6 +13,7 @@ import auth
 import config
 import db
 import flood_intel
+import imagery
 import intel_jobs
 import ml_model
 import notify
@@ -46,7 +47,8 @@ def _point_dict(c, lat: float, lng: float) -> Optional[dict]:
             "probability_basis": a["probability_basis"], "insufficient": a["insufficient"], "reason": INSUFFICIENT if a["insufficient"] else a["reason"],
             "explanation": a["explanation"], "signals": a["signals"], "missing": a["missing"], "sources": a["sources"], "model": a["model"],
             "recommended_action": a["recommended_action"], "computed_at": a["computed_at"], "weather_stale": a.get("weather_stale", False),
-            "confidence": a.get("confidence"), "confidence_basis": a.get("confidence_basis"), "features": a.get("features") or {}}
+            "confidence": a.get("confidence"), "confidence_basis": a.get("confidence_basis"), "features": a.get("features") or {},
+            "evidence_tier": a.get("evidence_tier"), "evidence_tier_note": a.get("evidence_tier_note"), "capped_at_high": a.get("capped_at_high", False)}
 
 
 @router.get("/flood-risk")
@@ -122,6 +124,13 @@ def satellite_water_expansion():
     return {"abnormal_cells": fresh, "stale_abnormal_cells": len(rows) - len(fresh),
             "note": "Satellite-detected water expansion indicates possible flooding or ponding; it does not confirm a flood.",
             "message": None if intel_jobs.provider_statuses()[1]["state"] in ("OK", "DEGRADED", "STALE") else "Satellite data unavailable"}
+
+
+@router.get("/satellite/imagery")
+def satellite_imagery():
+    """Tile layers for the map (satellite basemap, NASA daily imagery, NASA flood detection, Sentinel-1 radar water) with the
+    real date each one shows. The phone loads the tiles straight from the providers' tile servers."""
+    return imagery.catalogue()
 
 
 @router.get("/terrain")
@@ -226,6 +235,22 @@ async def nearest_evacuation(latitude: float = Query(..., ge=-90, le=90), longit
 
 
 # ------------------------------------------------------------------------------------------------------- admin
+def other_sources(osm_row, osm_roads: int) -> list:
+    """Sources outside the risk engine's jobs, reported honestly: NASA imagery (catalogue check), OpenStreetMap (last import)
+    and Sentinel-2, which is not connected in this build."""
+    cat = imagery.catalogue()
+    nasa_dates = [l["date"] for l in cat["layers"] if l.get("date")]
+    places, last_import = (osm_row[0], osm_row[1]) if osm_row else (0, None)
+    return [
+        {"name": "nasa_gibs", "label": "NASA GIBS imagery", "state": "OK" if nasa_dates else ("UNAVAILABLE" if cat["message"] else "NOT_RUN"),
+         "last_success": None, "detail": f"latest daily layers {max(nasa_dates)}" if nasa_dates else (cat["message"] or "catalogue not checked yet"), "last_error": cat["message"]},
+        {"name": "openstreetmap", "label": "OpenStreetMap", "state": "OK" if places or osm_roads else "NOT_RUN", "last_success": last_import,
+         "detail": f"{places} hospitals/shelters and {osm_roads} roads imported" if places or osm_roads else "not imported yet (Control → Import from OpenStreetMap)", "last_error": None},
+        {"name": "sentinel2", "label": "Sentinel-2 (NDWI)", "state": "NOT_CONNECTED", "last_success": None,
+         "detail": "Not connected in this build: optical imagery is often cloud-covered during floods; Sentinel-1 radar is used instead.", "last_error": None},
+    ]
+
+
 @router.get("/admin/providers")
 def admin_providers(_: dict = Depends(auth.require_admin)):
     with db.session() as c:
@@ -238,7 +263,9 @@ def admin_providers(_: dict = Depends(auth.require_admin)):
                   "historical_events": c.execute("SELECT COUNT(*) FROM historical_events").fetchone()[0]}
         zones = [_zone_dict(c, z) for z in ZONES]
         ml = ml_model.status(c)
-    return {"providers": intel_jobs.provider_statuses(), "counts": counts, "high_risk_zones": [z for z in zones if z["risk_level"] in ("HIGH", "CRITICAL")],
+        osm = c.execute("SELECT COUNT(*), MAX(created_at) FROM places WHERE source='OSM'").fetchone()
+        osm_roads = c.execute("SELECT COUNT(*) FROM roads WHERE source='OSM'").fetchone()[0]
+    return {"providers": intel_jobs.provider_statuses(), "other_sources": other_sources(osm, osm_roads), "counts": counts, "high_risk_zones": [z for z in zones if z["risk_level"] in ("HIGH", "CRITICAL")],
             "zones": zones, "model": flood_intel.MODEL_NAME, "ml": {"status": ml["status"], "reason": ml.get("reason")},
             "config": {"grid_bounds": config.MONITORING_BOUNDS, "grid_spacing_deg": config.GRID_SPACING, "weather_refresh_s": config.WEATHER_REFRESH_INTERVAL,
                        "satellite_refresh_s": config.SATELLITE_REFRESH_INTERVAL, "sar_water_threshold_db": config.SAR_WATER_THRESHOLD_DB}}

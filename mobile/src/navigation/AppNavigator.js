@@ -13,6 +13,8 @@ import HelpScreen from '../screens/HelpScreen';
 import AlertsScreen from '../screens/AlertsScreen';
 import AccountScreen from '../screens/AccountScreen';
 import LiveAssistanceScreen from '../screens/LiveAssistanceScreen';
+import AIAssistantModal from '../components/AIAssistantModal';
+import AIAssistantFAB from '../components/AIAssistantFAB';
 
 const TABS = [
   { key: 'Home', label: 'Home', icon: 'home', Screen: HomeScreen },
@@ -26,11 +28,16 @@ const TABS = [
 export default function AppNavigator() {
   const [active, setActiveRaw] = useState('Home');
   const [params, setParams] = useState({});
+  const [aiVisible, setAiVisible] = useState(false);
   const insets = useSafeAreaInsets();
   const { alerts } = useData();
   const t18 = useT();
 
   const navigate = (k, p) => {
+    if (k === 'AI' || k === 'Assistant') {
+      setAiVisible(true);
+      return;
+    }
     if (p) setParams((cur) => ({ ...cur, [k]: p }));
     setActiveRaw(k);
   };
@@ -43,7 +50,9 @@ export default function AppNavigator() {
       <View style={styles.screenContainer}>
         {TABS.map(({ key, Screen }) => (
           <View key={key} style={[StyleSheet.absoluteFill, (active !== key || isTracking) && styles.hiddenScreen]}>
-            <ScreenFade active={active === key && !isTracking}><Screen navigate={navigate} params={params[key]} /></ScreenFade>
+            <ScreenFade active={active === key && !isTracking}>
+              <Screen navigate={navigate} params={params[key]} openAI={() => setAiVisible(true)} />
+            </ScreenFade>
           </View>
         ))}
         {isTracking && (
@@ -56,6 +65,19 @@ export default function AppNavigator() {
           </View>
         )}
       </View>
+
+      {!isTracking && (
+        <AIAssistantFAB
+          onPress={() => setAiVisible(true)}
+          bottom={bottomPadding + 56}
+        />
+      )}
+
+      <AIAssistantModal
+        visible={aiVisible}
+        onClose={() => setAiVisible(false)}
+        onNavigate={navigate}
+      />
 
       <View style={[styles.bar, { paddingBottom: bottomPadding }, isTracking && styles.hiddenScreen]}>
         {TABS.map((t) => {

@@ -64,6 +64,8 @@ def test_reset_code_dies_after_five_wrong_guesses(outbox, monkeypatch):
 def test_email_verification(outbox):
     u = user_client("verify@test.local")
     assert u.get("/auth/me").json()["email_verified"] is False
+    assert [e for e in outbox.emails if e["to"] == "verify@test.local"] == []   # registering sends no code (codes belong to the login page)
+    assert u.post("/auth/resend-verification").status_code == 200              # the API still works if a client asks for one
     code = code_from(outbox, "verify@test.local", "Verify")
     assert u.post("/auth/verify-email", json={"code": "111111" if code != "111111" else "222222"}).status_code == 400
     assert u.post("/auth/verify-email", json={"code": code}).status_code == 200
@@ -423,3 +425,14 @@ def test_sign_in_code_resend_is_rate_limited_and_old_codes_stop_working(outbox, 
     if first != second:
         assert anon().post("/auth/login-code/verify", json={"email": "resend@test.local", "code": first}).status_code == 400
     assert anon().post("/auth/login-code/verify", json={"email": "resend@test.local", "code": second}).status_code == 200
+
+
+def test_new_report_types_and_my_reports(client):
+    u = user_client("reporter2@test.local")
+    for t in ("LANDSLIDE", "INFRASTRUCTURE_DAMAGE", "PERSON_IN_DANGER"):
+        assert u.post("/incidents", json={"type": t, "latitude": 12.97, "longitude": 77.59, "description": t.lower()}).status_code == 201, t
+    other = user_client("reporter3@test.local")
+    other.post("/incidents", json={"type": "FLOOD", "latitude": 12.98, "longitude": 77.60})
+    mine = u.get("/incidents", params={"mine": True}).json()
+    assert sorted(i["type"] for i in mine) == ["INFRASTRUCTURE_DAMAGE", "LANDSLIDE", "PERSON_IN_DANGER"]   # only my own
+    assert all(i["status"] == "REPORTED" for i in mine)

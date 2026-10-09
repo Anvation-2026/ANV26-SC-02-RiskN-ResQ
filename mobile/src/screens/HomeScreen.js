@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Feather from '@expo/vector-icons/Feather';
 import WeatherCard from '../components/WeatherCard';
 import Header from '../components/Header';
 import RiskCard from '../components/RiskCard';
+import EmergencyPanel from '../components/EmergencyPanel';
 import AlertCard from '../components/AlertCard';
 import ActionButton from '../components/ActionButton';
 import { symbols } from '../assets';
@@ -12,7 +13,7 @@ import ConnectionBanner from '../components/ConnectionBanner';
 import { useData } from '../context/DataContext';
 import { colors, radius, riskColor, shadow } from '../theme';
 import { haversineKm, timeAgo } from '../services/geo';
-import { FadeIn, staggerDelay } from '../components/motion';
+import { FadeIn, Pulse, staggerDelay } from '../components/motion';
 import { MetricCard, SectionTitle, StateView } from '../components/ui';
 import { ago } from '../components/rain';
 import { prettyResource } from '../integration/volunteerAdapter';
@@ -32,12 +33,14 @@ const Row = ({ label, value, color }) => (
   </View>
 );
 
-export default function HomeScreen({ navigate }) {
+export default function HomeScreen({ navigate, openAI }) {
   const insets = useSafeAreaInsets();
   const {
     userLocation,
     locationLabel,
     locationStatus,
+    locationMeta,
+    openLocationSettings,
     risk,
     weather,
     weatherMonitor,
@@ -72,7 +75,15 @@ export default function HomeScreen({ navigate }) {
     : [];
   const topAlert = alerts.length > 0 ? alerts[0] : null; // strongest active alert (zone alert or reported incident)
 
-  const isPermissionDenied = locationStatus === 'denied' || locationStatus === 'error';
+  const isPermissionDenied = ['denied', 'error', 'blocked', 'services_off'].includes(locationStatus) && !userLocation;
+  const LOC_TEXT = {
+    denied: ['Location not shared', 'RiskN ResQ needs your real-time location for flood risk where you are, alerts for your area, and the nearest help and lower-risk routes.'],
+    blocked: ['Location is turned off for RiskN ResQ', 'Location was refused earlier, so the phone will not ask again. Turn it on in Settings to see the risk where you are.'],
+    services_off: ['Location Services are off', 'Turn on Location Services on this phone so RiskN ResQ can find where you are.'],
+    error: ['Your location could not be found', 'No GPS signal yet. Move near a window or outdoors and try again.'],
+  };
+  const [locTitle, locBody] = LOC_TEXT[locationStatus] || LOC_TEXT.denied;
+  const needsSettings = locationStatus === 'blocked' || locationStatus === 'services_off';
 
   return (
     <View style={styles.container}>
@@ -90,6 +101,15 @@ export default function HomeScreen({ navigate }) {
           <Feather name="map-pin" size={13} color="#38BDF8" style={{ marginRight: 5 }} />
           <Text style={styles.locLabel}>Location:</Text>
           <Text style={styles.loc} numberOfLines={1}>{locationLabel}</Text>
+          {locationMeta ? (
+            <View style={[styles.gpsChip, { backgroundColor: locationMeta.source === 'gps' ? 'rgba(22,163,74,0.25)' : 'rgba(148,163,184,0.25)' }]}
+              accessibilityLabel={locationMeta.source === 'gps' ? `Live GPS, accurate to ${Math.round(locationMeta.accuracy || 0)} metres` : locationMeta.source === 'manual' ? 'Manual location' : 'Last known location'}>
+              {locationMeta.source === 'gps' ? <Pulse min={0.35}><View style={styles.gpsDot} /></Pulse> : null}
+              <Text style={styles.gpsText}>
+                {locationMeta.source === 'gps' ? `LIVE${locationMeta.accuracy ? ` ±${Math.round(locationMeta.accuracy)} m` : ''}` : locationMeta.source === 'manual' ? 'MANUAL' : 'LAST KNOWN'}
+              </Text>
+            </View>
+          ) : null}
         </View>
       </Header>
 
@@ -104,17 +124,15 @@ export default function HomeScreen({ navigate }) {
           <View style={styles.permissionCard}>
             <View style={styles.permissionHeader}>
               <Feather name="alert-triangle" size={18} color="#DC2626" style={{ marginRight: 8 }} />
-              <Text style={styles.permissionTitle}>Location Permission Required</Text>
+              <Text style={styles.permissionTitle}>{locTitle}</Text>
             </View>
-            <Text style={styles.permissionBody}>
-              RiskN ResQ requires your device GPS location to provide verified hyper-local rainfall calculations, corridor obstruction alerts, and community response dispatch.
-            </Text>
-            <Pressable style={styles.enableBtn} onPress={requestPermission}>
-              <Feather name="crosshair" size={14} color="#FFFFFF" style={{ marginRight: 6 }} />
-              <Text style={styles.enableBtnText}>Enable Location</Text>
+            <Text style={styles.permissionBody}>{locBody}</Text>
+            <Pressable style={styles.enableBtn} onPress={needsSettings && Platform.OS !== 'web' ? openLocationSettings : requestPermission}>
+              <Feather name={needsSettings ? 'settings' : 'crosshair'} size={14} color="#FFFFFF" style={{ marginRight: 6 }} />
+              <Text style={styles.enableBtnText}>{needsSettings && Platform.OS !== 'web' ? 'Open Settings' : locationStatus === 'error' ? 'Try again' : 'Allow location'}</Text>
             </Pressable>
-            <Pressable style={styles.manualBtn} onPress={() => applyManualLocation(12.9716, 77.5946, 'Bengaluru (manual location)')}>
-              <Text style={styles.manualBtnText}>Use Bengaluru instead (manual location)</Text>
+            <Pressable style={styles.manualBtn} onPress={() => applyManualLocation(12.9716, 77.5946, 'Bengaluru (sample location, not your position)')}>
+              <Text style={styles.manualBtnText}>Use a sample location instead (Bengaluru, not your position)</Text>
             </Pressable>
           </View>
         )}
@@ -172,6 +190,11 @@ export default function HomeScreen({ navigate }) {
           </View>
         )}
 
+        {/* EMERGENCY MODE: HIGH / CRITICAL where the person is (actions first, no animation) */}
+        {risk && !risk.insufficient && (currentLevel === 'HIGH' || currentLevel === 'CRITICAL') ? (
+          <EmergencyPanel risk={{ ...risk, level: currentLevel }} locationLabel={locationLabel} userLocation={userLocation} navigate={navigate} />
+        ) : null}
+
         {/* 2. REAL MULTI-FACTOR FLOOD RISK CARD */}
         <RiskCard
           offline={source !== 'live'}
@@ -179,11 +202,61 @@ export default function HomeScreen({ navigate }) {
           risk={risk ? { ...risk, score: risk.score ?? risk.risk_score ?? 0, level: currentLevel, probabilityBasis: risk.probability_basis } : null}
         />
 
+        {/* 2a. AI FLOOD & EMERGENCY INTELLIGENCE SPOTLIGHT */}
+        <FadeIn delay={staggerDelay(1)}>
+          <View style={styles.aiSpotlightCard}>
+            <View style={styles.aiSpotlightHeader}>
+              <View style={styles.aiSpotlightIconWrap}>
+                <Feather name="shield" size={17} color="#22D3EE" />
+                <View style={styles.aiLiveDot} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Text style={styles.aiSpotlightKicker}>AI EMERGENCY INTELLIGENCE</Text>
+                  <View style={styles.aiChipBadge}>
+                    <Text style={styles.aiChipBadgeText}>LIVE SENSOR GROUNDED</Text>
+                  </View>
+                </View>
+                <Text style={styles.aiSpotlightTitle}>RiskN ResQ Intelligence Assistant</Text>
+              </View>
+            </View>
+
+            <Text style={styles.aiSpotlightBody}>
+              Directly connected to Open-Meteo rainfall telemetry, Sentinel-1 radar water change, and road graphs. Ask any flood risk or evacuation question:
+            </Text>
+
+            <View style={styles.aiChipsGrid}>
+              {[
+                'What is my flood risk?',
+                'Why is my risk high?',
+                'Nearest designated shelter',
+                'Which roads are blocked?'
+              ].map((q, idx) => (
+                <Pressable
+                  key={idx}
+                  style={({ pressed }) => [styles.aiQuickChip, pressed && { opacity: 0.75 }]}
+                  onPress={() => (openAI ? openAI() : navigate('AI'))}
+                >
+                  <Feather name="zap" size={10} color="#22D3EE" style={{ marginRight: 4 }} />
+                  <Text style={styles.aiQuickChipText} numberOfLines={1}>{q}</Text>
+                </Pressable>
+              ))}
+            </View>
+
+            <Pressable
+              style={({ pressed }) => [styles.aiLaunchBtn, pressed && { opacity: 0.85 }]}
+              onPress={() => (openAI ? openAI() : navigate('AI'))}
+            >
+              <Feather name="message-square" size={14} color="#FFFFFF" style={{ marginRight: 6 }} />
+              <Text style={styles.aiLaunchBtnText}>ASK EMERGENCY ASSISTANT</Text>
+              <Feather name="arrow-right" size={14} color="#FFFFFF" style={{ marginLeft: 6 }} />
+            </Pressable>
+          </View>
+        </FadeIn>
 
         {/* weather (rainfall observation only; flood risk is the card above) */}
-        <FadeIn delay={staggerDelay(1)}>
+        <FadeIn delay={staggerDelay(2)}>
           <WeatherCard monitor={weatherMonitor} at={userLocation} />
-
         </FadeIn>
 
         {/* 2b. RISK HISTORY (this zone, last 12 h, one entry per change of level) */}
@@ -323,6 +396,9 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.bg,
   },
+  gpsChip: { flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2, marginLeft: 8 },
+  gpsDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#4ADE80' },
+  gpsText: { color: '#FFFFFF', fontFamily: 'PlusJakartaSans_800ExtraBold', fontSize: 10, letterSpacing: 0.4 },
   locationRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -593,5 +669,110 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: 'PlusJakartaSans_800ExtraBold',
     letterSpacing: 0.5,
+  },
+  aiSpotlightCard: {
+    backgroundColor: '#071224',
+    borderRadius: radius.card,
+    padding: 15,
+    borderWidth: 1.5,
+    borderColor: 'rgba(34,211,238,0.4)',
+    ...shadow,
+    shadowColor: '#22D3EE',
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  aiSpotlightHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 8,
+  },
+  aiSpotlightIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(34,211,238,0.15)',
+    borderWidth: 1,
+    borderColor: '#22D3EE',
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  aiLiveDot: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: '#16A34A',
+  },
+  aiSpotlightKicker: {
+    fontSize: 9.5,
+    fontFamily: 'PlusJakartaSans_800ExtraBold',
+    color: '#38BDF8',
+    letterSpacing: 0.8,
+  },
+  aiChipBadge: {
+    backgroundColor: 'rgba(34,211,238,0.2)',
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 4,
+  },
+  aiChipBadgeText: {
+    fontSize: 8,
+    fontFamily: 'PlusJakartaSans_800ExtraBold',
+    color: '#22D3EE',
+  },
+  aiSpotlightTitle: {
+    fontSize: 14,
+    fontFamily: 'PlusJakartaSans_800ExtraBold',
+    color: '#F8FAFC',
+  },
+  aiSpotlightBody: {
+    fontSize: 12.5,
+    fontFamily: 'PlusJakartaSans_500Medium',
+    color: '#94A3B8',
+    lineHeight: 18,
+    marginBottom: 10,
+  },
+  aiChipsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 12,
+  },
+  aiQuickChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#0F213A',
+    borderWidth: 1,
+    borderColor: 'rgba(34,211,238,0.25)',
+    borderRadius: radius.pill,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  aiQuickChipText: {
+    fontSize: 11,
+    fontFamily: 'PlusJakartaSans_600SemiBold',
+    color: '#E2E8F0',
+  },
+  aiLaunchBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#1565FF',
+    borderRadius: radius.button,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: '#3B82F6',
+  },
+  aiLaunchBtnText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontFamily: 'PlusJakartaSans_800ExtraBold',
+    letterSpacing: 0.6,
   },
 });

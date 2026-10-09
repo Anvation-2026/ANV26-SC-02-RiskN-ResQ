@@ -21,7 +21,7 @@ const Stat = ({ label, value, onPress }) => (
 
 export default function VolunteerHome({ navigate }) {
   const { user } = useAuth();
-  const { volunteer, reqs, loading, error, newIds, available, setAvailable, updateLocationFromGps } = useVolunteer();
+  const { volunteer, reqs, loading, error, newIds, available, setAvailable, updateLocationFromGps, locationState, lastShared, askLocation } = useVolunteer();
   const [busy, setBusy] = React.useState(false);
   const [msg, setMsg] = React.useState('');
 
@@ -97,7 +97,15 @@ export default function VolunteerHome({ navigate }) {
             <Feather name="map-pin" size={14} color={colors.muted} />
             <Text style={s.locText}>{hasLocation ? `${volunteer.latitude.toFixed(4)}, ${volunteer.longitude.toFixed(4)}` : 'Location unavailable'}</Text>
           </View>
-          <View style={{ marginTop: 10, alignSelf: 'flex-start' }}>
+          <Text style={[s.share, { color: locationState === 'granted' && available ? colors.LOW : colors.muted }]}>
+            {locationState === 'granted'
+              ? available
+                ? `● Live location shared while you are available${lastShared ? ` · updated ${Math.max(1, Math.round((Date.now() - lastShared.at) / 1000))} s ago${lastShared.accuracy ? ` · ±${Math.round(lastShared.accuracy)} m` : ''}` : ''}`
+                : 'Location sharing is paused while you are unavailable.'
+              : 'Location is not shared, so requests are matched to your last saved position.'}
+          </Text>
+          <View style={{ marginTop: 10, alignSelf: 'flex-start', flexDirection: 'row', gap: 8 }}>
+            {locationState !== 'granted' ? <SmallButton label="Share live location" disabled={busy} onPress={askLocation} /> : null}
             <SmallButton label="Update from my GPS" outline disabled={busy} onPress={() => run(updateLocationFromGps, 'Your location was updated from GPS.')} />
           </View>
         </Card>
@@ -114,6 +122,7 @@ export default function VolunteerHome({ navigate }) {
 }
 
 const s = StyleSheet.create({
+  share: { fontFamily: fonts.semibold, fontSize: 12, marginTop: 6, lineHeight: 17 },
   body: { padding: 16, paddingBottom: 40 },
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   dot: { width: 14, height: 14, borderRadius: 7 },

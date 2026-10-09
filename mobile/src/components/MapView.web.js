@@ -30,6 +30,7 @@ export default function MapView({
   zones: rawZones, routeLine: rawRoute, markers: rawMarkers, user: rawUser, labelBlockedOnly = false,
   rainAreas = [], onRainPress, places = [], onPlacePress,
   riskCells = [], satelliteCells = [], hotspots = [], terrainCells = [], cellHalf, onIntelPress, onRoadPress, onIncidentPress, onMarkerPress,
+  basemap, tileOverlays = [],
 }) {
   const roadCb = useRef(onRoadPress);
   roadCb.current = onRoadPress;
@@ -44,7 +45,7 @@ export default function MapView({
   const placeCb = useRef(onPlacePress);
   placeCb.current = onPlacePress;
   const el = useRef(null);
-  const state = useRef({ map: null, layer: null, fitted: '', bounds: null });
+  const state = useRef({ map: null, layer: null, fitted: '', bounds: null, base: null, baseUrl: TILES, overlays: {} });
 
   const roads = (Array.isArray(rawRoads) ? rawRoads : [])
     .map((r) => ({ ...r, coordinates: Array.isArray(r.coordinates) ? r.coordinates.filter(okPair).map(toPair) : [] }))
@@ -59,8 +60,12 @@ export default function MapView({
   // Create the map once.
   useEffect(() => {
     const map = L.map(el.current, { zoomControl: true, attributionControl: true, zoomAnimation: false, fadeAnimation: false, markerZoomAnimation: false }).setView([(user || DEFAULT_POINT).latitude, (user || DEFAULT_POINT).longitude], 14);
-    L.tileLayer(TILES, { maxZoom: 19, attribution: ATTRIBUTION }).addTo(map);
+    state.current.base = L.tileLayer(TILES, { maxZoom: 19, attribution: ATTRIBUTION }).addTo(map);
     state.current.map = map;
+    // white "not water" pixels of radar water tiles disappear when multiplied over the map below
+    if (typeof document !== 'undefined' && !document.getElementById('rr-tile-css')) {
+      const st = document.createElement('style'); st.id = 'rr-tile-css'; st.textContent = '.rr-multiply{mix-blend-mode:multiply}'; document.head.appendChild(st);
+    }
     state.current.layer = L.layerGroup().addTo(map);
     // When the container gets its real size (screen shown, window resized) refresh the tiles and re-fit the view.
     const refit = () => {
@@ -85,8 +90,36 @@ export default function MapView({
       if (sz.x !== node.clientWidth || sz.y !== node.clientHeight) refit();
     }, 400);
     setTimeout(() => map.invalidateSize(), 50);
-    return () => { clearInterval(guard); if (ro) ro.disconnect(); map.remove(); state.current = { map: null, layer: null, fitted: '', bounds: null }; };
+    return () => { clearInterval(guard); if (ro) ro.disconnect(); map.remove(); state.current = { map: null, layer: null, fitted: '', bounds: null, base: null, baseUrl: TILES, overlays: {} }; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Basemap: the street map, a satellite photo mosaic, or NASA's image of today. Coarse layers are upscaled past their native zoom.
+  useEffect(() => {
+    const st = state.current;
+    if (!st.map) return;
+    const url = basemap && basemap.url ? basemap.url : TILES;
+    if (url === st.baseUrl) return;
+    if (st.base) st.map.removeLayer(st.base);
+    st.base = L.tileLayer(url, { maxZoom: 19, maxNativeZoom: basemap && basemap.max_native_zoom ? basemap.max_native_zoom : 19, attribution: basemap && basemap.attribution ? esc(basemap.attribution) : ATTRIBUTION }).addTo(st.map);
+    st.base.bringToBack();
+    st.baseUrl = url;
+    // a coarse daily image (NASA ~375 m) is only meaningful at a regional zoom: step out so it can be read
+    if (basemap && basemap.max_native_zoom && basemap.max_native_zoom <= 9 && st.map.getZoom() > 10) st.map.setZoom(10, { animate: false });
+  }, [basemap && basemap.url]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Satellite overlays (NASA flood detection, Sentinel-1 radar water), drawn over the basemap and under our own data.
+  useEffect(() => {
+    const st = state.current;
+    if (!st.map) return;
+    const want = {};
+    (Array.isArray(tileOverlays) ? tileOverlays : []).forEach((o) => { if (o && o.url) want[o.id] = o; });
+    Object.keys(st.overlays).forEach((id) => { if (!want[id]) { st.map.removeLayer(st.overlays[id]); delete st.overlays[id]; } });
+    Object.values(want).forEach((o) => {
+      if (st.overlays[o.id]) return;
+      st.overlays[o.id] = L.tileLayer(o.url, { maxZoom: 19, maxNativeZoom: o.max_native_zoom || 12, opacity: o.opacity == null ? 0.8 : o.opacity, zIndex: 5,
+        className: o.blend ? 'rr-multiply' : '', attribution: o.attribution ? esc(o.attribution) : undefined }).addTo(st.map);
+    });
+  }, [JSON.stringify((tileOverlays || []).map((o) => o && o.id))]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Redraw the overlays whenever the data changes.
   useEffect(() => {
@@ -191,6 +224,10 @@ export default function MapView({
 
     // you
     if (user) {
+      // GPS accuracy: the true position is somewhere inside this circle
+      if (user.source !== 'manual' && typeof user.accuracy === 'number' && user.accuracy > 0 && user.accuracy < 2000) {
+        L.circle([user.latitude, user.longitude], { radius: user.accuracy, color: colors.route, weight: 1, fillColor: colors.route, fillOpacity: 0.08, interactive: false }).addTo(layer);
+      }
       L.marker([user.latitude, user.longitude], { icon: dot(colors.route, 22, true), zIndexOffset: 1000 })
         .bindTooltip('You', { permanent: true, direction: 'bottom', className: 'rr-you' }).addTo(layer);
       bounds.push([user.latitude, user.longitude]);

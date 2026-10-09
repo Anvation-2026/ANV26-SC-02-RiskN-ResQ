@@ -1,5 +1,6 @@
 """Cloudinary image storage (REST API, no SDK). The API secret stays on the backend and is only ever read from the
-environment: CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET.
+environment: CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET, or the single CLOUDINARY_URL
+(cloudinary://API_KEY:API_SECRET@CLOUD_NAME) that the Cloudinary dashboard shows and the Render blueprint asks for.
 When these are not set the backend keeps photos on local disk instead (see main.store_photo)."""
 import hashlib
 import os
@@ -12,8 +13,22 @@ FOLDER = "risknresq/incidents"
 _transport: Optional[httpx.AsyncBaseTransport] = None  # tests inject httpx.MockTransport here
 
 
+def credentials() -> Optional[tuple]:
+    """(cloud name, api key, api secret) from the three variables, else from CLOUDINARY_URL; None when not configured."""
+    parts = tuple(os.environ.get(k, "").strip() for k in ("CLOUDINARY_CLOUD_NAME", "CLOUDINARY_API_KEY", "CLOUDINARY_API_SECRET"))
+    if all(parts):
+        return parts
+    url = os.environ.get("CLOUDINARY_URL", "").strip()
+    if url.startswith("cloudinary://") and "@" in url and ":" in url:
+        creds, cloud = url[len("cloudinary://"):].rsplit("@", 1)
+        key, _, secret = creds.partition(":")
+        if cloud and key and secret:
+            return cloud.split("?")[0].strip("/"), key, secret
+    return None
+
+
 def cloud_configured() -> bool:
-    return all(os.environ.get(k, "").strip() for k in ("CLOUDINARY_CLOUD_NAME", "CLOUDINARY_API_KEY", "CLOUDINARY_API_SECRET"))
+    return credentials() is not None
 
 
 def sign(params: dict, api_secret: str) -> str:
@@ -30,9 +45,10 @@ def thumbnail_url(url: str, width: int = 1000) -> str:
 
 async def upload_image(data: bytes, public_id: str, content_type: str = "application/octet-stream") -> str:
     """Upload bytes to Cloudinary and return the secure image URL. Raises RuntimeError on any failure."""
-    cloud = os.environ["CLOUDINARY_CLOUD_NAME"].strip()
-    key = os.environ["CLOUDINARY_API_KEY"].strip()
-    secret = os.environ["CLOUDINARY_API_SECRET"].strip()
+    creds = credentials()
+    if not creds:
+        raise RuntimeError("Cloudinary is not configured")
+    cloud, key, secret = creds
     params = {"folder": FOLDER, "public_id": public_id, "timestamp": str(int(time.time()))}
     form = {**params, "api_key": key, "signature": sign(params, secret)}
     try:

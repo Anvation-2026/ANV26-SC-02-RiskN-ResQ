@@ -18,7 +18,7 @@ PUBLIC = {
     ("POST", "/auth/login-code/request"), ("POST", "/auth/login-code/verify"),
     ("GET", "/weather"), ("GET", "/weather/monitoring"), ("GET", "/risk"), ("GET", "/sync"),
     ("GET", "/flood-risk"), ("GET", "/flood-risk/cells"), ("GET", "/flood-risk/{zone}"), ("GET", "/intelligence/overview"),
-    ("GET", "/satellite/observations"), ("GET", "/satellite/water-expansion"), ("GET", "/terrain"), ("GET", "/water-levels"),
+    ("GET", "/satellite/observations"), ("GET", "/satellite/imagery"), ("GET", "/satellite/water-expansion"), ("GET", "/terrain"), ("GET", "/water-levels"),
     ("GET", "/flood-hotspots"), ("GET", "/risk-history"), ("GET", "/road-risk"),
     ("GET", "/alerts"), ("GET", "/roads"), ("GET", "/roads/{road_id}"), ("GET", "/places"),
 }

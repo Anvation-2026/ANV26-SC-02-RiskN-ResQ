@@ -1,6 +1,7 @@
 import React from 'react';
 import { VolunteerProvider, useVolunteer } from '../context/VolunteerContext';
 import TabShell from './TabShell';
+import LocationGate from '../components/LocationGate';
 import VolunteerHome from '../screens/volunteer/VolunteerHome';
 import VolunteerRequests from '../screens/volunteer/VolunteerRequests';
 import VolunteerNearby from '../screens/volunteer/VolunteerNearby';
@@ -16,9 +17,16 @@ const TABS = [
 ];
 
 function Tabs() {
-  const { newIds, markSeen } = useVolunteer();
+  const v = useVolunteer();
   // The Requests tab shows a badge while an assignment the volunteer has not looked at yet is waiting.
-  return <TabShell tabs={TABS} badges={{ Requests: newIds.length }} onTabChange={(k) => k === 'Requests' && markSeen()} />;
+  return (
+    <>
+      <TabShell tabs={TABS} badges={{ Requests: v.newIds.length }} onTabChange={(k) => k === 'Requests' && v.markSeen()} />
+      {v.showLocationGate ? (
+        <LocationGate state={v.locationState} role="volunteer" busy={v.locBusy} onAllow={v.askLocation} onLater={v.dismissLocationGate} onSettings={v.openLocationSettings} onRetry={v.retryLocation} />
+      ) : null}
+    </>
+  );
 }
 
 export default function VolunteerNavigator() {

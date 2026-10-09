@@ -958,3 +958,51 @@ def test_data_confidence_falls_when_signals_are_missing_or_stale():
     assert fi.data_confidence(full[:2], [], False, 0, "LOW")[0] == "LOW"
     assert fi.data_confidence(full, [], True, 0, "LOW")[0] == "LOW"                 # stale weather is never high confidence
     assert fi.data_confidence(full, [], False, 1, "HIGH")[0] == "MEDIUM"            # one signal alone does not make an elevated estimate high-confidence
+
+
+def test_satellite_imagery_catalogue_is_honest_about_dates(monkeypatch):
+    import imagery
+    xml = ("<Layer><ows:Identifier>VIIRS_SNPP_CorrectedReflectance_TrueColor</ows:Identifier><Default>2026-10-08</Default></Layer>"
+           "<Layer><ows:Identifier>OPERA_L3_Dynamic_Surface_Water_Extent-Sentinel-1</ows:Identifier><Default>2026-10-07</Default></Layer>")
+    assert imagery.parse_latest_dates(xml, ["VIIRS_SNPP_CorrectedReflectance_TrueColor", "OPERA_L3_Dynamic_Surface_Water_Extent-Sentinel-1", "Missing"]) == \
+        {"VIIRS_SNPP_CorrectedReflectance_TrueColor": "2026-10-08", "OPERA_L3_Dynamic_Surface_Water_Extent-Sentinel-1": "2026-10-07"}
+    monkeypatch.setattr(imagery, "_ensure_fresh", lambda: None)  # no network in tests
+    monkeypatch.setitem(imagery._state, "dates", {"VIIRS_SNPP_CorrectedReflectance_TrueColor": "2026-10-08"})
+    monkeypatch.setitem(imagery._state, "fetched_at", 1.0)
+    monkeypatch.setitem(imagery._state, "error", None)
+    c = anon().get("/satellite/imagery").json()
+    by = {l["id"]: l for l in c["layers"]}
+    assert set(by) == {"satellite", "today", "nasa_flood", "radar_water"}
+    assert by["satellite"]["live"] is False and "not live" in by["satellite"]["note"]        # the high-res basemap is never called live
+    assert by["today"]["date"] == "2026-10-08" and "{z}/{y}/{x}" in by["today"]["url"] and by["today"]["max_native_zoom"] == 9
+    assert by["radar_water"]["date"] is None and by["nasa_flood"]["legend"][0]["label"] == "Flood"   # unknown dates stay unknown
+    assert "not a live video feed" in c["note"]
+
+
+# ------------------------------------------------------------- conservative multi-signal rules and evidence tiers
+def test_rain_on_low_ground_alone_is_held_at_high_never_critical():
+    refresh(r1=40.0, r3=90.0, r6=150.0, r24=220.0)
+    terrain_row(susc=90.0)
+    a = assess()
+    assert a["risk_level"] == "HIGH" and a["risk_score"] == 74 and a["capped_at_high"] is True
+    assert any("Held at HIGH" in e for e in a["explanation"])
+    assert a["evidence_tier"] == "HIGH FLOOD RISK"                       # rain + low ground: high risk, not "flooding"
+
+
+def test_independent_water_evidence_allows_critical_and_the_top_tier():
+    refresh(r1=40.0, r3=90.0, r6=150.0, r24=220.0)
+    terrain_row(susc=90.0)
+    sat_row(conf="HIGH", pct=150.0)
+    a = assess()
+    assert a["risk_level"] == "CRITICAL" and a["capped_at_high"] is False
+    assert a["evidence_tier"] == "CRITICAL FLOOD RISK" and "including direct evidence of water" in a["evidence_tier_note"]
+
+
+def test_evidence_tiers_need_independent_signals():
+    assert fi.evidence_tier("LOW", set(), False) == "NORMAL"
+    assert fi.evidence_tier("CRITICAL", {"rainfall"}, False) == "OBSERVATION"          # one kind of evidence is only an observation
+    assert fi.evidence_tier("MEDIUM", {"rainfall", "satellite"}, True) == "POSSIBLE FLOODING"
+    assert fi.evidence_tier("MEDIUM", {"rainfall", "terrain"}, False) == "OBSERVATION"  # terrain is susceptibility, not water
+    assert fi.evidence_tier("HIGH", {"rainfall", "terrain"}, False) == "HIGH FLOOD RISK"
+    assert fi.evidence_tier("CRITICAL", {"rainfall", "terrain", "history"}, False) == "HIGH FLOOD RISK"   # no direct water evidence
+    assert all("confirmed" not in n.lower() or "not" in n.lower() for n in fi.TIER_NOTE.values())

@@ -2,7 +2,8 @@
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 import { useAuth } from '../context/AuthContext';
-import { DataProvider } from '../context/DataContext';
+import { DataProvider, useData } from '../context/DataContext';
+import LocationGate from '../components/LocationGate';
 import { ResponseProvider } from '../context/ResponseContext';
 import { colors, palette } from '../theme';
 import LaunchScreen from '../components/Launch';
@@ -14,6 +15,13 @@ import ForgotPasswordScreen from '../screens/auth/ForgotPasswordScreen';
 import AppNavigator from './AppNavigator';
 import AdminNavigator from './AdminNavigator';
 import VolunteerNavigator from './VolunteerNavigator';
+
+// Asks for location (with the reasons) once the person is signed in, unless they already decided.
+function DataLocationGate() {
+  const d = useData();
+  if (!d.showLocationGate) return null;
+  return <LocationGate state={d.locationStatus} role="user" busy={d.locBusy} onAllow={d.askLocation} onLater={d.dismissLocationGate} onSettings={d.openLocationSettings} onRetry={d.retryLocation} />;
+}
 
 export default function RootNavigator() {
   const { status, user, entering, entered } = useAuth();
@@ -39,6 +47,7 @@ export default function RootNavigator() {
       <DataProvider>
         <ResponseProvider>
           {user.role === 'admin' ? <AdminNavigator /> : <AppNavigator />}
+          <DataLocationGate />
         </ResponseProvider>
       </DataProvider>
     );

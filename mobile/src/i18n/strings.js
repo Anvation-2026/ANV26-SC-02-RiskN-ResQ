@@ -7,7 +7,7 @@ export const STRINGS = {
   en: {
     'legend.lowRisk': 'Low risk', 'legend.medium': 'Medium risk', 'legend.high': 'High risk', 'legend.critical': 'Critical risk', 'legend.satellite': 'Satellite water change',
     'legend.hotspot': 'Potential hotspot', 'legend.potential': 'Potentially affected road',
-    'layer.risk': 'Flood risk', 'layer.rain': 'Rainfall', 'layer.satellite': 'Satellite', 'layer.hotspots': 'Hotspots', 'layer.roads': 'Road risk', 'layer.terrain': 'Terrain', 'layer.incidents': 'Incidents', 'layer.hospitals': 'Hospitals', 'layer.shelters': 'Shelters', 'layer.volunteers': 'Volunteers',
+    'layer.risk': 'Flood risk', 'layer.rain': 'Rainfall', 'layer.satellite': 'Satellite', 'layer.hotspots': 'Hotspots', 'layer.roads': 'Road risk', 'layer.terrain': 'Terrain', 'layer.incidents': 'Incidents', 'layer.hospitals': 'Hospitals', 'layer.shelters': 'Shelters', 'layer.volunteers': 'Volunteers', 'layer.nasaFlood': 'NASA flood', 'layer.radarWater': 'Radar water', 'base.map': 'Map', 'base.satellite': 'Satellite', 'base.today': 'Today (NASA)',
     'legend.verifiedBlocked': 'Verified blocked road', 'legend.terrain': 'Low-lying terrain', 'legend.verifiedIncident': 'Verified incident',
     'evac.button': 'Nearest evacuation point',
     'tab.Home': 'Home', 'tab.Map': 'Map', 'tab.Report': 'Report', 'tab.Help': 'Help', 'tab.Alerts': 'Alerts', 'tab.Account': 'Account',
@@ -41,7 +41,7 @@ export const STRINGS = {
   hi: {
     'legend.lowRisk': 'कम जोखिम', 'legend.medium': 'मध्यम जोखिम', 'legend.high': 'उच्च जोखिम', 'legend.critical': 'गंभीर जोखिम', 'legend.satellite': 'उपग्रह से जल परिवर्तन',
     'legend.hotspot': 'संभावित हॉटस्पॉट', 'legend.potential': 'संभावित प्रभावित सड़क',
-    'layer.risk': 'बाढ़ जोखिम', 'layer.rain': 'वर्षा', 'layer.satellite': 'उपग्रह', 'layer.hotspots': 'हॉटस्पॉट', 'layer.roads': 'सड़क जोखिम', 'layer.terrain': 'भूभाग', 'layer.incidents': 'घटनाएँ', 'layer.hospitals': 'अस्पताल', 'layer.shelters': 'आश्रय', 'layer.volunteers': 'स्वयंसेवक',
+    'layer.risk': 'बाढ़ जोखिम', 'layer.rain': 'वर्षा', 'layer.satellite': 'उपग्रह', 'layer.hotspots': 'हॉटस्पॉट', 'layer.roads': 'सड़क जोखिम', 'layer.terrain': 'भूभाग', 'layer.incidents': 'घटनाएँ', 'layer.hospitals': 'अस्पताल', 'layer.shelters': 'आश्रय', 'layer.volunteers': 'स्वयंसेवक', 'layer.nasaFlood': 'नासा बाढ़', 'layer.radarWater': 'रडार जल', 'base.map': 'नक्शा', 'base.satellite': 'उपग्रह', 'base.today': 'आज (नासा)',
     'legend.verifiedBlocked': 'सत्यापित बंद सड़क', 'legend.terrain': 'निचला भूभाग', 'legend.verifiedIncident': 'सत्यापित घटना',
     'evac.button': 'निकटतम निकासी स्थल',
     'tab.Home': 'होम', 'tab.Map': 'नक्शा', 'tab.Report': 'रिपोर्ट', 'tab.Help': 'मदद', 'tab.Alerts': 'अलर्ट', 'tab.Account': 'खाता',
@@ -75,7 +75,7 @@ export const STRINGS = {
   kn: {
     'legend.lowRisk': 'ಕಡಿಮೆ ಅಪಾಯ', 'legend.medium': 'ಮಧ್ಯಮ ಅಪಾಯ', 'legend.high': 'ಹೆಚ್ಚಿನ ಅಪಾಯ', 'legend.critical': 'ಗಂಭೀರ ಅಪಾಯ', 'legend.satellite': 'ಉಪಗ್ರಹ ನೀರಿನ ಬದಲಾವಣೆ',
     'legend.hotspot': 'ಸಂಭಾವ್ಯ ಹಾಟ್‌ಸ್ಪಾಟ್', 'legend.potential': 'ಸಂಭಾವ್ಯ ಪ್ರಭಾವಿತ ರಸ್ತೆ',
-    'layer.risk': 'ಪ್ರವಾಹ ಅಪಾಯ', 'layer.rain': 'ಮಳೆ', 'layer.satellite': 'ಉಪಗ್ರಹ', 'layer.hotspots': 'ಹಾಟ್‌ಸ್ಪಾಟ್', 'layer.roads': 'ರಸ್ತೆ ಅಪಾಯ', 'layer.terrain': 'ಭೂಪ್ರದೇಶ', 'layer.incidents': 'ಘಟನೆಗಳು', 'layer.hospitals': 'ಆಸ್ಪತ್ರೆಗಳು', 'layer.shelters': 'ಆಶ್ರಯಗಳು', 'layer.volunteers': 'ಸ್ವಯಂಸೇವಕರು',
+    'layer.risk': 'ಪ್ರವಾಹ ಅಪಾಯ', 'layer.rain': 'ಮಳೆ', 'layer.satellite': 'ಉಪಗ್ರಹ', 'layer.hotspots': 'ಹಾಟ್‌ಸ್ಪಾಟ್', 'layer.roads': 'ರಸ್ತೆ ಅಪಾಯ', 'layer.terrain': 'ಭೂಪ್ರದೇಶ', 'layer.incidents': 'ಘಟನೆಗಳು', 'layer.hospitals': 'ಆಸ್ಪತ್ರೆಗಳು', 'layer.shelters': 'ಆಶ್ರಯಗಳು', 'layer.volunteers': 'ಸ್ವಯಂಸೇವಕರು', 'layer.nasaFlood': 'ನಾಸಾ ಪ್ರವಾಹ', 'layer.radarWater': 'ರಾಡಾರ್ ನೀರು', 'base.map': 'ನಕ್ಷೆ', 'base.satellite': 'ಉಪಗ್ರಹ', 'base.today': 'ಇಂದು (ನಾಸಾ)',
     'legend.verifiedBlocked': 'ದೃಢೀಕೃತ ಮುಚ್ಚಿದ ರಸ್ತೆ', 'legend.terrain': 'ತಗ್ಗು ಭೂಪ್ರದೇಶ', 'legend.verifiedIncident': 'ದೃಢೀಕೃತ ಘಟನೆ',
     'evac.button': 'ಹತ್ತಿರದ ಸ್ಥಳಾಂತರ ಸ್ಥಳ',
     'tab.Home': 'ಮುಖಪುಟ', 'tab.Map': 'ನಕ್ಷೆ', 'tab.Report': 'ವರದಿ', 'tab.Help': 'ಸಹಾಯ', 'tab.Alerts': 'ಎಚ್ಚರಿಕೆ', 'tab.Account': 'ಖಾತೆ',

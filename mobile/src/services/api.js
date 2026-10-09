@@ -113,6 +113,11 @@ export async function getIncidents(latitude, longitude, radiusKm = 25.0) {
 
 export const newRequestKey = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
+// the signed-in person's own reports, newest first, to follow their review status
+export async function getMyReports() {
+  return await http('/incidents?mine=true&limit=20');
+}
+
 export async function submitIncident({ type, description, latitude, longitude, severity = 3, idempotencyKey }) {
   if (typeof latitude !== 'number' || typeof longitude !== 'number') {
     throw new Error('GPS coordinates are required to submit an incident.');
@@ -272,6 +277,11 @@ export async function getIntelligenceOverview(latitude, longitude) {
   return http(`/intelligence/overview${q}`);
 }
 
+// satellite basemap + NASA daily imagery / flood detection / radar water layers, each with the date it really shows
+export async function getSatelliteImagery() {
+  return await http('/satellite/imagery');
+}
+
 export async function getFloodRiskAt(latitude, longitude) {
   return http(`/flood-risk?latitude=${latitude}&longitude=${longitude}`);
 }
@@ -315,4 +325,30 @@ export async function uploadIncidentPhoto(incidentId, uri, onProgress) {
     };
     xhr.send(blob);
   });
+}
+
+// ── AI ASSISTANT (GROUNDED FLOOD & EMERGENCY INTELLIGENCE) ───────────────
+/**
+ * @param {{ message: string, latitude?: number, longitude?: number, history?: Array<{ role: string, content: string }> }} params
+ */
+export async function sendChatMessage({ message, latitude, longitude, history = [] }) {
+  const body = {
+    message,
+    ...(typeof latitude === 'number' ? { latitude } : {}),
+    ...(typeof longitude === 'number' ? { longitude } : {}),
+    history: history.map((m) => ({ role: m.role, content: m.content })),
+  };
+  return await http('/assistant/chat', { method: 'POST', body });
+}
+
+export async function getSuggestedQuestions(latitude, longitude) {
+  let url = '/assistant/suggested-questions';
+  if (typeof latitude === 'number' && typeof longitude === 'number') {
+    url += `?latitude=${latitude}&longitude=${longitude}`;
+  }
+  return await http(url);
+}
+
+export async function getAssistantStatus() {
+  return await http('/assistant/status');
 }

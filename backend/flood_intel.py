@@ -268,6 +268,12 @@ def assess_cell(c, key: str, zone: Optional[str] = None, near: Optional[tuple] =
     score = min(100.0, env_total + rep_pts)
     if env_total < 25:
         score = min(score, 49.0)  # a handful of reports cannot declare a flood on their own
+    # Conservative: CRITICAL needs independent corroboration of water, not just rain on low ground. Corroborating evidence is
+    # a satellite water gain, high modelled river discharge, rain above the historical extremes, or a verified incident.
+    corroborated = bool(fam & {"satellite", "river", "history"}) or rep["verified"] > 0
+    capped = score > 74 and not corroborated
+    if capped:
+        score = 74.0
     score = int(round(score))
     insufficient = w_gone and not (sat_abnormal or wl_pts or hist_pts)  # community reports alone are not environmental evidence
     if insufficient:
@@ -285,6 +291,8 @@ def assess_cell(c, key: str, zone: Optional[str] = None, near: Optional[tuple] =
     prob, basis = ml_model.predict(features, score)
     contributing = [s for s in signals if s["points"] > 0]
     explanation = [f"{s['label']}: {s['detail']}" for s in contributing]
+    if capped:
+        explanation.append("Held at HIGH: no independent evidence of water (satellite, river, historical extreme or verified incident) yet to support CRITICAL.")
     if level == "LOW":
         reason = f"No strong flood signals: {r24:g} mm of rain in the last 24 h."
     else:
@@ -292,7 +300,8 @@ def assess_cell(c, key: str, zone: Optional[str] = None, near: Optional[tuple] =
         reason = "Flood risk is elevated because of " + (", ".join(names) if names else "community reports") + "."
     srcs = [{"name": k, "source": v[0], "observed_at": v[1]} for k, v in sources.items()]
     conf, conf_basis = data_confidence(signals, missing, w_stale, len(fam), level)
-    return {"confidence": conf, "confidence_basis": conf_basis, **base, "signals": signals, "missing": missing, "risk_score": score, "risk_level": level, "probability": prob,
+    tier = evidence_tier(level, fam, sat_abnormal or wl_pts > 0 or rep["verified"] > 0)
+    return {"confidence": conf, "confidence_basis": conf_basis, "evidence_tier": tier, "evidence_tier_note": TIER_NOTE[tier], "capped_at_high": capped,**base, "signals": signals, "missing": missing, "risk_score": score, "risk_level": level, "probability": prob,
             "probability_basis": basis, "reason": reason, "explanation": explanation, "sources": srcs, "evidence_families": len(fam),
             "families": sorted(fam), "satellite_abnormal": sat_abnormal, "satellite_confidence": sat["confidence"] if sat_abnormal else None, "satellite_age_days": sat_age_days,
             "features": features, "recommended_action": ACTIONS.get(level), "report_counts": rep,
@@ -300,6 +309,31 @@ def assess_cell(c, key: str, zone: Optional[str] = None, near: Optional[tuple] =
 
 
 CORE_FAMILIES = ("rainfall", "satellite", "terrain", "river", "history")
+
+# Multi-signal evidence tiers. Nothing here is "confirmed flooding": the app has no ground-truth verification of flood extent.
+TIER_NOTE = {
+    "NORMAL": "No signal currently points to flooding.",
+    "OBSERVATION": "One kind of evidence (for example rain) is elevated. On its own it does not mean flooding.",
+    "POSSIBLE FLOODING": "Direct evidence of water (satellite, river or a verified report) agrees with another independent signal.",
+    "HIGH FLOOD RISK": "High estimated risk backed by at least two independent kinds of evidence.",
+    "CRITICAL FLOOD RISK": "Critical estimated risk backed by at least three independent kinds of evidence, including direct evidence of water.",
+}
+
+
+def evidence_tier(level: Optional[str], families: set, direct_water: bool) -> str:
+    """OBSERVATION < POSSIBLE FLOODING < HIGH FLOOD RISK < CRITICAL FLOOD RISK, by how much independent evidence agrees.
+    families are the evidence families contributing (rainfall, satellite, terrain, river, history); direct_water means a
+    satellite water gain, elevated modelled river discharge or a verified incident report."""
+    n = len(families)
+    if level == "CRITICAL" and n >= 3 and direct_water:
+        return "CRITICAL FLOOD RISK"
+    if level in ("HIGH", "CRITICAL") and n >= 2:
+        return "HIGH FLOOD RISK"
+    if direct_water and n >= 2:
+        return "POSSIBLE FLOODING"
+    if n >= 1 or level in ("MEDIUM", "HIGH", "CRITICAL"):
+        return "OBSERVATION"
+    return "NORMAL"
 
 
 def data_confidence(signals: list, missing: list, weather_stale: bool, agreeing: int, level: str) -> tuple:
@@ -378,6 +412,9 @@ def hotspot_out(r) -> dict:
             "zone": r["zone"], "risk_score": r["risk_score"], "risk_level": r["risk_level"], "signals": json.loads(r["signals"] or "[]"),
             "sources": json.loads(r["sources"] or "[]"), "confidence": r["confidence"], "status": "POTENTIAL FLOOD HOTSPOT",
             "note": "Potential hotspot from several independent signals; not a confirmed flood.",
+            "evidence_tier": evidence_tier(r["risk_level"], {x["key"] for x in json.loads(r["signals"] or "[]") if x.get("key") in CORE_FAMILIES},
+                                           any(x.get("key") in ("satellite", "river") or (x.get("key") == "reports" and "verified" in (x.get("detail") or "") and not (x.get("detail") or "").startswith("0 verified"))
+                                               for x in json.loads(r["signals"] or "[]"))),
             "recommended_action": ACTIONS.get(r["risk_level"]), "created_at": r["created_at"], "updated_at": r["updated_at"]}
 
 
