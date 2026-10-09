@@ -17,6 +17,7 @@ class RouteCandidate(BaseModel):
     traffic: str = Field("NORMAL", description="Traffic condition: NORMAL, MODERATE, HEAVY")
     source: str = Field("Google Routes", description="Routing provider used")
     warnings: List[str] = Field(default_factory=list)
+    steps: List[dict] = Field(default_factory=list, description="Turn-by-turn directions, when the provider supplies them")
 
 
 class RoutingProvider(ABC):

@@ -7,6 +7,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { colors, riskColor } from '../theme';
 import { useT } from '../i18n';
+import { HAZARD_STYLE, polygonRings, ROUTE_COLOR } from './geojson';
 import { cellCorners, drawableCells, drawableRain, RAIN_COLOR, RAIN_FILL, RAIN_RADIUS_KM, RISK_COLOR, RISK_FILL, SAT_COLOR, TERRAIN_COLOR } from './rain';
 
 const DEFAULT_POINT = { latitude: 12.9716, longitude: 77.5946 }; // used only when no location is available
@@ -31,7 +32,10 @@ export default function MapView({
   rainAreas = [], onRainPress, places = [], onPlacePress,
   riskCells = [], satelliteCells = [], hotspots = [], terrainCells = [], cellHalf, onIntelPress, onRoadPress, onIncidentPress, onMarkerPress,
   basemap, tileOverlays = [], routeSegments, altRouteLine, onPointPress, pickedPoint,
+  routeColor, routeOptions, onRouteSelect, hazardShapes, floodShapes,
 }) {
+  const routeSelCb = useRef(onRouteSelect);
+  routeSelCb.current = onRouteSelect;
   const pointCb = useRef(onPointPress);
   pointCb.current = onPointPress;
   const roadCb = useRef(onRoadPress);
@@ -196,6 +200,25 @@ export default function MapView({
       if (isBlocked || isAlt) r.coordinates.forEach((p) => bounds.push(p)); // ordinary roads must not zoom the map out
     });
 
+    // satellite-detected potential new water (Sentinel-1 change detection): blue patches, under routes and markers
+    const shape = (geometry, st, tip) => polygonRings(geometry).forEach((p) => {
+      L.polygon([p.outer, ...p.holes], { color: st.color, weight: st.dashed ? 1.5 : 2, dashArray: st.dashed ? '5 5' : null, fillColor: st.color, fillOpacity: st.fill })
+        .bindTooltip(esc(tip)).addTo(layer);
+    });
+    (Array.isArray(floodShapes) ? floodShapes : []).forEach((f) => shape(f.geometry, HAZARD_STYLE.SATELLITE_INUNDATION,
+      `${HAZARD_STYLE.SATELLITE_INUNDATION.label}${f.properties && f.properties.area_km2 != null ? ` · ${f.properties.area_km2} km²` : ''}`));
+    // hazards the route planner checked against (reports, closures, weather-based risk areas)
+    (Array.isArray(hazardShapes) ? hazardShapes : []).forEach((h) => shape(h.geometry, HAZARD_STYLE[h.kind] || HAZARD_STYLE.USER_REPORT, h.label || ''));
+    // other candidate routes: grey dashed (red dashed when they cross a hazard); tap one to select it
+    (Array.isArray(routeOptions) ? routeOptions : []).forEach((r) => {
+      const pts = (r.points || []).filter(okPair).map(toPair);
+      if (pts.length < 2) return;
+      L.polyline(pts, { color: '#fff', weight: 9, opacity: 0.8 }).addTo(layer);
+      L.polyline(pts, { color: r.affected ? ROUTE_COLOR.affected : ROUTE_COLOR.other, weight: 5, opacity: 0.85, dashArray: '9 7' })
+        .bindTooltip(esc(`${r.label} (tap to select)`)).on('click', (e) => { L.DomEvent.stopPropagation(e); if (routeSelCb.current) routeSelCb.current(r.id); }).addTo(layer);
+      pts.forEach((p) => bounds.push(p));
+    });
+
     // the fastest alternative (when it is not the recommended one): grey, dashed, under the recommended route
     const alt = Array.isArray(altRouteLine) ? altRouteLine.filter(okPair).map(toPair) : [];
     if (alt.length > 1) {
@@ -211,7 +234,7 @@ export default function MapView({
           .bindTooltip(`Recommended lower-risk route${g.level ? ` · ${g.level} flood risk here` : ''}`).addTo(layer));
         L.polyline(routeLine, { color: '#0B1220', weight: 1.5, opacity: 0.6, dashArray: '1 10' }).addTo(layer); // keeps the route readable over a same-colour cell
       } else {
-        L.polyline(routeLine, { color: colors.route, weight: 7 }).bindTooltip('Recommended lower-risk route').addTo(layer);
+        L.polyline(routeLine, { color: routeColor || colors.route, weight: 7 }).bindTooltip(routeColor ? 'Selected route' : 'Recommended lower-risk route').addTo(layer);
       }
       routeLine.forEach((p) => bounds.push(p));
     }
@@ -254,7 +277,7 @@ export default function MapView({
     }
 
     // Fit the view when the set of things changes, not on every refresh (so panning and zooming are not undone).
-    const key = JSON.stringify([user && [user.latitude.toFixed(3), user.longitude.toFixed(3)], drawableRain(rainAreas).length, drawableCells(riskCells).length, satelliteCells.length, hotspots.length, roads.length, routeLine.length, markers.length, incidents.length]);
+    const key = JSON.stringify([user && [user.latitude.toFixed(3), user.longitude.toFixed(3)], drawableRain(rainAreas).length, drawableCells(riskCells).length, satelliteCells.length, hotspots.length, roads.length, routeLine.length, routeLine[0], routeLine[routeLine.length - 1], markers.length, incidents.length]);
     if (key !== state.current.fitted && bounds.length) {
       state.current.fitted = key;
       state.current.bounds = L.latLngBounds(bounds);
@@ -264,7 +287,7 @@ export default function MapView({
     }
   }, [JSON.stringify(rawRoads), JSON.stringify(rawBlocked), JSON.stringify(rawIncidents), JSON.stringify(rawMarkers), JSON.stringify(rawRoute), // eslint-disable-line react-hooks/exhaustive-deps
     JSON.stringify(rawZones), JSON.stringify(rainAreas), JSON.stringify(places), JSON.stringify(riskCells), JSON.stringify(satelliteCells),
-    JSON.stringify(hotspots), JSON.stringify(terrainCells), JSON.stringify(routeSegments), JSON.stringify(altRouteLine), JSON.stringify(pickedPoint), level, user && user.latitude, user && user.longitude, alternative && alternative.road && alternative.road.id, labelBlockedOnly]);
+    JSON.stringify(hotspots), JSON.stringify(terrainCells), JSON.stringify(routeSegments), JSON.stringify(altRouteLine), JSON.stringify(pickedPoint), routeColor, JSON.stringify(routeOptions), JSON.stringify(hazardShapes), JSON.stringify(floodShapes), level, user && user.latitude, user && user.longitude, alternative && alternative.road && alternative.road.id, labelBlockedOnly]);
 
   return (
     <View style={[styles.map, { height }]}>

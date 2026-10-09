@@ -389,4 +389,9 @@ async def run_forever(p: Providers) -> None:
         if loop_now - last["satellite"] >= config.SATELLITE_REFRESH_INTERVAL:
             last["satellite"] = loop_now
             await run_all(p, ("satellite",))
+            try:  # a new Sentinel-1 pass is analysed for flooding once (never per user request)
+                import flood_analysis
+                await flood_analysis.auto_analyse()
+            except Exception as exc:
+                logger.warning("automatic flood analysis failed: %s", exc)
         await asyncio.sleep(300)

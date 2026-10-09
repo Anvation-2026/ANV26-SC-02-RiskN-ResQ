@@ -7,7 +7,7 @@ import { colors, fonts } from '../theme';
 
 // Choose where to check the flood risk: search any place by name (OpenStreetMap, through the backend) or go back to GPS.
 // Picking a place never pretends to be the person's position: the app labels it "Viewing <place>, not your GPS location".
-export default function LocationPicker({ visible, onClose, onPick, onUseGps, gpsAvailable }) {
+export default function LocationPicker({ visible, onClose, onPick, onUseGps, gpsAvailable, title = 'Check the risk at another place', gpsLabel = 'Use my GPS location', note, actionLabel = 'Check flood risk at' }) {
   const [q, setQ] = useState('');
   const [results, setResults] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -35,7 +35,7 @@ export default function LocationPicker({ visible, onClose, onPick, onUseGps, gps
   }, [q]);
 
   return (
-    <Sheet visible={visible} onClose={onClose} title="Check the risk at another place" tone={colors.primary}>
+    <Sheet visible={visible} onClose={onClose} title={title} tone={colors.primary}>
       <View style={s.searchRow}>
         <Feather name="search" size={16} color={colors.muted} />
         <TextInput value={q} onChangeText={setQ} placeholder="Search a place, e.g. Koramangala" placeholderTextColor="#94A3B8" style={s.input}
@@ -44,7 +44,7 @@ export default function LocationPicker({ visible, onClose, onPick, onUseGps, gps
       </View>
       {error ? <Text style={s.error}>{error}</Text> : null}
       {results.map((r) => (
-        <Pressable key={`${r.latitude},${r.longitude}`} style={s.result} accessibilityRole="button" accessibilityLabel={`Check flood risk at ${r.name}`}
+        <Pressable key={`${r.latitude},${r.longitude}`} style={s.result} accessibilityRole="button" accessibilityLabel={`${actionLabel} ${r.name}`}
           onPress={() => onPick({ latitude: r.latitude, longitude: r.longitude, label: r.name })}>
           <View style={[s.pin, !r.inside_monitored_area && { backgroundColor: '#F1F5F9' }]}>
             <Feather name="map-pin" size={15} color={r.inside_monitored_area ? colors.primary : colors.muted} />
@@ -60,10 +60,10 @@ export default function LocationPicker({ visible, onClose, onPick, onUseGps, gps
       {gpsAvailable ? (
         <Pressable style={s.gps} onPress={onUseGps} accessibilityRole="button">
           <Feather name="navigation" size={15} color="#fff" />
-          <Text style={s.gpsText}>Use my GPS location</Text>
+          <Text style={s.gpsText}>{gpsLabel}</Text>
         </Pressable>
       ) : null}
-      <Text style={s.note}>Place search: OpenStreetMap. You can also tap any spot on the Map to check the risk there.</Text>
+      <Text style={s.note}>{note || 'Place search: OpenStreetMap. You can also tap any spot on the Map to check the risk there.'}</Text>
     </Sheet>
   );
 }

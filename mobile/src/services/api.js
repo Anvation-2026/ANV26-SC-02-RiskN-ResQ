@@ -291,6 +291,21 @@ export async function placeName(latitude, longitude) {
   return await http(`/geocode/reverse?latitude=${latitude}&longitude=${longitude}`);
 }
 
+// satellite flood analysis (Sentinel-1 change detection, run on the backend) and hazard-checked destination routing
+export async function getLatestFloodAnalysis() {
+  return http('/flood-analysis/latest');
+}
+
+export async function planSafeRoute(origin, destination) {
+  const place = (p) => ({ latitude: p.latitude, longitude: p.longitude, label: p.label ? String(p.label).slice(0, 120) : null });
+  return http('/routes/safe-route', { method: 'POST', body: { origin: place(origin), destination: place(destination) } });
+}
+
+export async function reassessRoute({ geometry, knownHazardIds = [], currentPosition, destination }) {
+  const place = (p) => (p ? { latitude: p.latitude, longitude: p.longitude, label: p.label ? String(p.label).slice(0, 120) : null } : null);
+  return http('/routes/reassess', { method: 'POST', body: { geometry, known_hazard_ids: knownHazardIds, current_position: place(currentPosition), destination: place(destination) } });
+}
+
 export async function getFloodRiskAt(latitude, longitude) {
   return http(`/flood-risk?latitude=${latitude}&longitude=${longitude}`);
 }

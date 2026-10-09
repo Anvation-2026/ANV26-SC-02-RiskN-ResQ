@@ -5,5 +5,11 @@ httpx>=0.27.0
 python-dotenv>=1.0.0
 pytest>=8.0.0
 psycopg[binary]>=3.1
+# satellite flood analysis and route/hazard geometry
+numpy>=1.26
+shapely>=2.0
+pyproj>=3.6
+# optional: Google Earth Engine (used only when GEE_SERVICE_ACCOUNT_JSON and GEE_PROJECT are set)
+earthengine-api>=1.1
 # optional: error reporting (set SENTRY_DSN to enable)
 sentry-sdk>=2.0.0

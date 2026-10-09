@@ -56,6 +56,12 @@ services:
         value: auto
       - key: SENTRY_DSN            # optional error reporting
         sync: false
+      - key: FLOOD_ANALYSIS_ENGINE # satellite flood polygons: auto = Earth Engine when configured, else Planetary Computer (no key)
+        value: auto
+      - key: GEE_SERVICE_ACCOUNT_JSON  # optional: Google Earth Engine service-account key JSON (secret; see docs/SATELLITE_FLOOD_AND_SAFE_ROUTING.md)
+        sync: false
+      - key: GEE_PROJECT           # optional: the Google Cloud project registered for Earth Engine
+        sync: false
 
   # ---------------------------------------------------------------- web app (Expo web export, served as a static site)
   - type: web

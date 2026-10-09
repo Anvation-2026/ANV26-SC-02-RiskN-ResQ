@@ -140,6 +140,32 @@ CREATE TABLE IF NOT EXISTS water_extent_observations (
 );
 CREATE INDEX IF NOT EXISTS ix_water_extent_scene ON water_extent_observations(scene_id, cell);
 
+CREATE TABLE IF NOT EXISTS flood_analyses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    status TEXT NOT NULL,
+    engine TEXT,
+    bbox TEXT NOT NULL,
+    params TEXT,
+    requested_by INTEGER,
+    triggered_by TEXT,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT,
+    after_scene TEXT,
+    acquired_at TEXT,
+    baseline_dates TEXT,
+    flooded_km2 REAL,
+    analysed_km2 REAL,
+    polygons TEXT,
+    quality TEXT,
+    warnings TEXT,
+    method TEXT,
+    source TEXT,
+    tile_url TEXT,
+    error TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_flood_analyses_status ON flood_analyses(status, acquired_at);
+
 CREATE TABLE IF NOT EXISTS satellite_observations (
     cell TEXT PRIMARY KEY,
     latitude REAL NOT NULL,

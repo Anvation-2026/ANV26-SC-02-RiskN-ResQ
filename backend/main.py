@@ -146,10 +146,12 @@ app = FastAPI(
 import routes_account
 import routes_admin
 import routes_assistant
+import routes_flood
 app.include_router(routes_account.router)
 app.include_router(routes_admin.router)
 app.include_router(routes_intel.router)
 app.include_router(routes_assistant.router)
+app.include_router(routes_flood.router)
 if config.CORS_ORIGINS == ["*"] and hardening.TRUST_PROXY:
     logger.warning("CORS is open to every origin while TRUST_PROXY is set (a deployment): set CORS_ORIGINS to your web address.")
 app.add_middleware(hardening.RateLimitMiddleware)
@@ -173,6 +175,7 @@ intel_providers = intel_jobs.Providers(
     water=[GaugeWaterLevelProvider(), GloFASProvider()], climate=ERA5Provider())
 routes_intel.providers = intel_providers
 routes_intel.routing_provider = routing_provider
+routes_flood.routing_provider = routing_provider
 
 
 # ---------- Exception Handlers ----------

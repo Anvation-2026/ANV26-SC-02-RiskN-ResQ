@@ -36,6 +36,7 @@ Backend: Python 3.12+, FastAPI, Pydantic v2, PostgreSQL 16 (psycopg 3; SQLite fo
 |---|---|
 | Rainfall 1/3/6/24 h + 6 h forecast | Open-Meteo forecast API, polled by the backend every 15 min for a 25-point grid |
 | Satellite water change | Sentinel-1 radar (Microsoft Planetary Computer STAC + statistics API); Sentinel-2 NDWI as optical fallback |
+| Satellite flood polygons | Sentinel-1 change detection (Planetary Computer, no key; Google Earth Engine when `GEE_*` is set), JRC permanent water, Copernicus DEM, ESA WorldCover |
 | Terrain | Copernicus DEM 90 m via Open-Meteo (elevation, slope, depression) |
 | River level | GloFAS **modelled** river discharge via Open-Meteo Flood API (no gauges are connected) |
 | Rainfall history | ERA5 reanalysis, 10 years of daily rain, via Open-Meteo archive |
@@ -50,6 +51,8 @@ Per ~9 km grid cell the engine adds: rainfall (worst of 24 h, 1.5x 6 h, 4x 1 h) 
 
 ## 8. Routing
 Candidate routes come from the real street network. Routes crossing a blocked road or a blocking incident are excluded (routes are densified so a long straight segment cannot slip past a closed road); the rest are ranked by `time x (1 + 0.6 x mean flood risk/100) x (1 + 0.1 per potentially-affected road)`. The geospatial module's Dijkstra uses the same risk-weighted cost when roads carry a risk score. Road states: `OPEN`, `POTENTIALLY_AFFECTED` (area-level estimate), `REPORTED_BLOCKED`, `VERIFIED_BLOCKED` (admin closure or verified incident). Wording is always "Recommended alternative route based on current environmental and incident data": never "safe".
+
+**Navigate Safely** (Map tab): pick a destination by search or on the map; candidate routes are intersected (Shapely, equal-area projection) with satellite-detected flood polygons, credible reports, road closures and weather-based risk areas, ranked by hazard exposure then time, with directions, data freshness and automatic reassessment while following a route. Every route crossing a hazard means no recommendation. Details: [docs/SATELLITE_FLOOD_AND_SAFE_ROUTING.md](docs/SATELLITE_FLOOD_AND_SAFE_ROUTING.md).
 
 ## 9. Volunteer matching
 A help request (medicine, food, water, first aid, evacuation; with priority and quantity) is matched to the nearest available volunteer whose skill/resources fit, using the original distance-based matcher. Volunteers can also claim open requests. Status timeline and live ETA are shown to the requester; volunteers declare resource quantities that decrease on completion. Admins see demand, capacity and *suggested* standby positions (never an automatic dispatch).
@@ -75,7 +78,7 @@ Tables, indexes and column upgrades are created automatically at start. Without 
 
 ### Environment variables
 Names only (copy `backend/.env.example` to `backend/.env`; it is git-ignored):
-`DATABASE_URL`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_NAME`, `CORS_ORIGINS`, `TRUST_PROXY`, `APP_URL`, `GOOGLE_ROUTES_API_KEY`, `IMD_API_KEY`, `KSNDMC_API_KEY`, `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`, `SMTP_HOST/PORT/USER/PASSWORD/FROM`, `TWILIO_ACCOUNT_SID/AUTH_TOKEN/FROM`, `SENTRY_DSN`, `PUSH_ENABLED`, rate limits (`RATE_LIMIT_PER_MINUTE`, `AUTH_RATE_LIMIT_PER_MINUTE`), weather/intelligence tuning (`MONITORING_BOUNDS`, `GRID_SPACING`, `WEATHER_REFRESH_INTERVAL`, `HEAVY_RAIN_THRESHOLD`, `SATELLITE_*`, `SAR_WATER_THRESHOLD_DB`, `INTEL_ENABLED`, ...), `DEMO_DATA`. Only `ADMIN_*` and `DATABASE_URL` are needed to start. Mobile: `EXPO_PUBLIC_API_URL` (**required** for release builds), `GOOGLE_MAPS_API_KEY` (standalone native builds only).
+`DATABASE_URL`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_NAME`, `CORS_ORIGINS`, `TRUST_PROXY`, `APP_URL`, `GOOGLE_ROUTES_API_KEY`, `IMD_API_KEY`, `KSNDMC_API_KEY`, `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`, `SMTP_HOST/PORT/USER/PASSWORD/FROM`, `TWILIO_ACCOUNT_SID/AUTH_TOKEN/FROM`, `SENTRY_DSN`, `PUSH_ENABLED`, rate limits (`RATE_LIMIT_PER_MINUTE`, `AUTH_RATE_LIMIT_PER_MINUTE`), weather/intelligence tuning (`MONITORING_BOUNDS`, `GRID_SPACING`, `WEATHER_REFRESH_INTERVAL`, `HEAVY_RAIN_THRESHOLD`, `SATELLITE_*`, `SAR_WATER_THRESHOLD_DB`, `INTEL_ENABLED`, ...), satellite flood analysis (`FLOOD_ANALYSIS_ENGINE`, `GEE_SERVICE_ACCOUNT_JSON` (secret), `GEE_PROJECT`, `FLOOD_*`; see the satellite doc), `DEMO_DATA`. Only `ADMIN_*` and `DATABASE_URL` are needed to start. Mobile: `EXPO_PUBLIC_API_URL` (**required** for release builds), `GOOGLE_MAPS_API_KEY` (standalone native builds only).
 
 ## 12. Run
 ```bash

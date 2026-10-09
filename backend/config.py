@@ -77,6 +77,18 @@ SAT_ABNORMAL_MIN_PCT = float(os.getenv("SAT_ABNORMAL_MIN_PCT", "40"))  # and at 
 SATELLITE_STALE_DAYS = float(os.getenv("SATELLITE_STALE_DAYS", "14"))
 PLANETARY_COMPUTER_URL = os.getenv("PLANETARY_COMPUTER_URL", "https://planetarycomputer.microsoft.com/api").strip()
 
+# ---- Satellite flood analysis (Sentinel-1 change detection, see flood_analysis.py) ----
+# "auto" uses Google Earth Engine when a service account is configured, otherwise Microsoft Planetary Computer (no key).
+FLOOD_ANALYSIS_ENGINE = os.getenv("FLOOD_ANALYSIS_ENGINE", "auto").strip().lower()
+GEE_SERVICE_ACCOUNT_JSON = os.getenv("GEE_SERVICE_ACCOUNT_JSON", "").strip()  # the key file's JSON (or base64 of it); never commit it
+GEE_PROJECT = os.getenv("GEE_PROJECT", "").strip()  # Google Cloud project registered for Earth Engine
+FLOOD_CHANGE_DB = float(os.getenv("FLOOD_CHANGE_DB", "-3"))  # backscatter drop vs the baseline (dB) that marks new water
+FLOOD_MIN_AREA_M2 = float(os.getenv("FLOOD_MIN_AREA_M2", "20000"))  # flood patches smaller than this are dropped as noise
+FLOOD_MAX_SLOPE_DEG = float(os.getenv("FLOOD_MAX_SLOPE_DEG", "5"))  # steeper ground is masked (radar shadow, water cannot pond)
+FLOOD_ANALYSIS_PIXELS = max(128, min(1024, int(os.getenv("FLOOD_ANALYSIS_PIXELS", "640"))))  # raster width for Planetary Computer
+FLOOD_AUTO_ANALYSIS = os.getenv("FLOOD_AUTO_ANALYSIS", "1").strip() not in ("0", "false", "no")  # analyse each new pass once
+FLOOD_ANALYSIS_STALE_DAYS = float(os.getenv("FLOOD_ANALYSIS_STALE_DAYS", "12"))  # older satellite passes no longer block routes
+
 # ---- AI Assistant (Gemini / OpenAI / Grounded Engine) ----
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip() or None
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip() or None

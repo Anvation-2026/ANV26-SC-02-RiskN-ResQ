@@ -17,6 +17,7 @@ import RNMapView, {
 import Feather from '@expo/vector-icons/Feather';
 import { colors, radius, riskColor, shadow } from '../theme';
 import { useT } from '../i18n';
+import { HAZARD_STYLE, polygonRings, ROUTE_COLOR } from './geojson';
 import { cellCorners, drawableCells, drawableRain, RAIN_COLOR, RAIN_FILL, RAIN_RADIUS_KM, RISK_COLOR, RISK_FILL, SAT_COLOR, TERRAIN_COLOR } from './rain';
 
 export function MapLegend({ items }) {
@@ -185,6 +186,11 @@ export default function MapView({
   altRouteLine,
   onPointPress,
   pickedPoint,
+  routeColor,
+  routeOptions,
+  onRouteSelect,
+  hazardShapes,
+  floodShapes,
 }) {
   const mapRef = useRef(null);
   const userCoord = useMemo(() => normalizeCoord(user), [user]);
@@ -494,6 +500,25 @@ export default function MapView({
           );
         })}
 
+        {/* 2b. SATELLITE-DETECTED POTENTIAL NEW WATER and the hazards the route planner checked against */}
+        {[...(Array.isArray(floodShapes) ? floodShapes.map((f, i) => ({ id: `flood-${i}`, kind: 'SATELLITE_INUNDATION', geometry: f.geometry })) : []),
+          ...(Array.isArray(hazardShapes) ? hazardShapes : [])].map((h) => {
+          const st = HAZARD_STYLE[h.kind] || HAZARD_STYLE.USER_REPORT;
+          return polygonRings(h.geometry).map((p, j) => (
+            <RNPolygon key={`hz-${h.id}-${j}`} coordinates={p.outer.map(([latitude, longitude]) => ({ latitude, longitude }))}
+              holes={p.holes.map((r) => r.map(([latitude, longitude]) => ({ latitude, longitude })))}
+              fillColor={`${st.color}${Math.round(st.fill * 255).toString(16).padStart(2, '0')}`} strokeColor={st.color} strokeWidth={st.dashed ? 1 : 2}
+              lineDashPattern={st.dashed ? [5, 5] : undefined} zIndex={3} />
+          ));
+        })}
+        {/* 2c. OTHER CANDIDATE ROUTES (tap to select): grey dashed, red dashed when they cross a hazard */}
+        {(Array.isArray(routeOptions) ? routeOptions : []).map((r) => {
+          const pts = (r.points || []).map(normalizeCoord).filter(Boolean);
+          return pts.length > 1 ? (
+            <RNPolyline key={`opt-${r.id}`} coordinates={pts} strokeColor={r.affected ? ROUTE_COLOR.affected : ROUTE_COLOR.other} strokeWidth={5}
+              lineDashPattern={[9, 7]} zIndex={7} tappable onPress={() => onRouteSelect && onRouteSelect(r.id)} />
+          ) : null;
+        })}
         {/* 3a. FASTEST ALTERNATIVE (grey, dashed) when it is not the recommended route */}
         {Array.isArray(altRouteLine) && altRouteLine.length > 1 ? (
           <RNPolyline coordinates={altRouteLine.map(normalizeCoord).filter(Boolean)} strokeColor="rgba(71,85,105,0.75)" strokeWidth={4} lineDashPattern={[8, 8]} zIndex={7} />
@@ -504,7 +529,7 @@ export default function MapView({
             <RNPolyline coordinates={activeRouteCoords} strokeColor="#FFFFFF" strokeWidth={8} zIndex={8} />
             {Array.isArray(routeSegments) && routeSegments.length ? routeSegments.filter((g) => g.points && g.points.length > 1).map((g, i) => (
               <RNPolyline key={`seg-${i}`} coordinates={g.points.map(normalizeCoord).filter(Boolean)} strokeColor={g.level ? RISK_COLOR[g.level] : '#1565FF'} strokeWidth={5} zIndex={9} />
-            )) : <RNPolyline coordinates={activeRouteCoords} strokeColor="#1565FF" strokeWidth={5} zIndex={9} />}
+            )) : <RNPolyline coordinates={activeRouteCoords} strokeColor={routeColor || '#1565FF'} strokeWidth={5} zIndex={9} />}
           </>
         )}
         {pickedPoint && normalizeCoord(pickedPoint) ? (
