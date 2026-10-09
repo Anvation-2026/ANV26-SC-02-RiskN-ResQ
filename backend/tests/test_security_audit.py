@@ -163,3 +163,24 @@ def test_help_lifecycle_routes_refuse_normal_users_and_unassigned_volunteers(cli
     for step in ("reject", "en-route", "arrived"):
         r = v.post(f"/help-requests/999999/{step}")
         assert r.status_code == 404, (step, r.status_code)
+
+
+def test_cors_uses_the_configured_origins_not_a_wildcard():
+    import config
+    import main
+    cors = next(m for m in main.app.user_middleware if m.cls.__name__ == "CORSMiddleware")
+    assert cors.kwargs["allow_origins"] == config.CORS_ORIGINS
+
+
+def test_cors_config_for_a_deployment(monkeypatch):
+    import importlib
+    import config
+    monkeypatch.setenv("TRUST_PROXY", "1")
+    monkeypatch.setenv("CORS_ORIGINS", "https://riskn-resq-web.onrender.com")
+    try:
+        assert importlib.reload(config).CORS_ORIGINS == ["https://riskn-resq-web.onrender.com"]
+        monkeypatch.delenv("CORS_ORIGINS")
+        assert importlib.reload(config).CORS_ORIGINS == []          # deployed without a web address: no browser origin at all
+    finally:
+        monkeypatch.undo()
+        importlib.reload(config)

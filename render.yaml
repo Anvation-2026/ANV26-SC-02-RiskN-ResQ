@@ -1,7 +1,8 @@
 # One-click deploy on Render (https://render.com): Dashboard → New → Blueprint → pick this repository.
 # It creates three things: the FastAPI backend (Docker), a managed PostgreSQL database, and the web app (static site).
 # Secrets marked sync:false are typed into the Render dashboard when the blueprint is applied; they are never stored in git.
-# The backend and the web app find each other automatically (fromService); no address has to be typed by hand.
+# The backend and the web app reach each other by their public onrender.com addresses (set below). If Render gives a service a
+# different address (for example a suffix because the name is taken), change EXPO_PUBLIC_API_URL and CORS_ORIGINS to match.
 databases:
   - name: riskn-db
     plan: free
@@ -23,8 +24,8 @@ services:
         sync: false
       - key: ADMIN_NAME
         value: Super Admin
-      - key: CORS_ORIGINS          # the web app's address (a bare host is accepted; https:// is added)
-        fromService: { type: web, name: riskn-resq-web, property: host }
+      - key: CORS_ORIGINS          # the web app's PUBLIC address (fromService "host" is Render's internal name, which browsers cannot reach)
+        value: https://riskn-resq-web.onrender.com
       - key: TRUST_PROXY
         value: "1"
       - key: DEMO_DATA             # never seed sample data in a real deployment
@@ -70,5 +71,5 @@ services:
     envVars:
       - key: NODE_VERSION          # Expo SDK 57 needs Node 20 or newer
         value: "22"
-      - key: EXPO_PUBLIC_API_URL   # baked into the web build: the backend's address (a bare host is accepted; https:// is added)
-        fromService: { type: web, name: riskn-resq-api, property: host }
+      - key: EXPO_PUBLIC_API_URL   # baked into the web build: the backend's PUBLIC address (not Render's internal host name)
+        value: https://riskn-resq-api.onrender.com

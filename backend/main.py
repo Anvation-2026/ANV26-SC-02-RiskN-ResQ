@@ -157,7 +157,7 @@ app.add_middleware(hardening.RequestLogMiddleware)
 hardening.init_sentry()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=config.CORS_ORIGINS,  # "*" only for local development; a deployment lists its web address (see config.py)
     allow_methods=["*"],
     allow_headers=["*"],
 )
